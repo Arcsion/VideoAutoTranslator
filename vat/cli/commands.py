@@ -1776,6 +1776,17 @@ def upload_sync(ctx, playlist, retry_delay):
         
         click.echo(f"\n结果: {result['success']} 成功, {result['failed']} 失败, 共 {result['total']} 个")
         
+        # 显示诊断结果
+        diag = result.get('diagnostics', {})
+        if diag.get('upload_completed_no_aid'):
+            click.echo(f"\n⚠ {len(diag['upload_completed_no_aid'])} 个视频 upload 已完成但无 bilibili_aid（需手动核实）:")
+            for vid, title in diag['upload_completed_no_aid']:
+                click.echo(f"  - {vid}: {title}")
+        if diag.get('aid_not_found_on_bilibili'):
+            click.echo(f"\n⚠ {len(diag['aid_not_found_on_bilibili'])} 个视频有 bilibili_aid 但 B站查不到（可能已删除）:")
+            for vid, aid, title in diag['aid_not_found_on_bilibili']:
+                click.echo(f"  - {vid} (av{aid}): {title}")
+        
         if result['failed'] > 0 and retry_delay > 0:
             click.echo(f"\n有 {result['failed']} 个视频同步失败，{retry_delay} 分钟后自动重试...")
             import time

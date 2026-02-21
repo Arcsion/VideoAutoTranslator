@@ -462,6 +462,13 @@ def tools_upload_sync(playlist, retry_delay):
         result = season_sync(db, uploader, playlist)
         _emit(f"结果: {result['success']} 成功, {result['failed']} 失败, 共 {result['total']} 个")
 
+        # 显示诊断结果
+        diag = result.get('diagnostics', {})
+        if diag.get('upload_completed_no_aid'):
+            _emit(f"⚠ {len(diag['upload_completed_no_aid'])} 个视频 upload 已完成但无 bilibili_aid（需手动核实）")
+        if diag.get('aid_not_found_on_bilibili'):
+            _emit(f"⚠ {len(diag['aid_not_found_on_bilibili'])} 个视频有 bilibili_aid 但 B站查不到（可能已删除）")
+
         if result['failed'] > 0 and retry_delay > 0:
             _emit(f"有 {result['failed']} 个失败，{retry_delay} 分钟后重试...")
             _progress(50)

@@ -444,24 +444,48 @@ class BilibiliUploader(BaseUploader):
                 return True
             
             # 2. 获取视频的 cid 和 title（API 要求 episodes 对象包含这些字段）
-            # 注意：刚上传的视频可能还未被公共 API 索引（需要转码/审核），
-            # 此处仅尝试一次，延迟重试由外部 season_sync 负责。
+            # 优先用公共 API；失败时 fallback 到创作中心 API（支持定时发布/未发布/审核中的视频）
+            cid = None
+            title = None
+            
+            # 尝试公共 API
             resp = session.get(
                 'https://api.bilibili.com/x/web-interface/view',
                 params={'aid': aid},
                 timeout=10
             )
             view_data = resp.json()
-            if view_data.get('code') != 0:
-                logger.warning(f"获取视频信息失败 av{aid}: {view_data.get('message')}（可能尚未索引，稍后通过 upload sync 重试）")
-                return False
+            if view_data.get('code') == 0:
+                pages = view_data['data'].get('pages', [])
+                if pages:
+                    cid = pages[0]['cid']
+                title = view_data['data'].get('title', '')
             
-            pages = view_data['data'].get('pages', [])
-            if not pages:
-                logger.error(f"视频 av{aid} 的 pages 为空，无法获取 cid")
+            # 公共 API 失败（定时发布/未发布/审核中），fallback 到创作中心 API
+            if not cid:
+                logger.info(f"公共 API 无法获取 av{aid} 信息（{view_data.get('message', '未知')}），尝试创作中心 API...")
+                try:
+                    resp2 = session.get(
+                        'https://member.bilibili.com/x/client/archive/view',
+                        params={'aid': aid},
+                        timeout=10
+                    )
+                    creative_data = resp2.json()
+                    if creative_data.get('code') == 0:
+                        archive = creative_data.get('data', {}).get('archive', {})
+                        videos = creative_data.get('data', {}).get('videos', [])
+                        title = archive.get('title', '')
+                        if videos:
+                            cid = videos[0].get('cid')
+                        logger.info(f"创作中心 API 获取成功: av{aid}, title={title[:30]}, cid={cid}")
+                    else:
+                        logger.warning(f"创作中心 API 也失败 av{aid}: {creative_data.get('message')}")
+                except Exception as e2:
+                    logger.warning(f"创作中心 API 异常 av{aid}: {e2}")
+            
+            if not cid:
+                logger.warning(f"无法获取视频 av{aid} 的 cid（公共API和创作中心API均失败），稍后通过 upload sync 重试")
                 return False
-            cid = pages[0]['cid']
-            title = view_data['data'].get('title', '')
             if not title:
                 logger.warning(f"视频 av{aid} 的 title 为空")
             
@@ -1754,11 +1778,18 @@ class BilibiliUploader(BaseUploader):
 def season_sync(db, uploader: BilibiliUploader, playlist_id: str) -> Dict[str, Any]:
     """
     批量将已上传但未入集的视频添加到 B站 合集，然后按 #数字 排序。
+    同时执行诊断检查，发现并汇报异常状态的视频。
     
-    查找指定 playlist 中所有满足以下条件的视频：
+    核心同步逻辑：
     - metadata 中有 bilibili_aid（已上传到B站）
     - metadata 中有 bilibili_target_season_id（配置了目标合集）
     - bilibili_season_added != True（尚未成功添加到合集）
+    
+    诊断检查：
+    - upload_completed_no_aid: upload task 已完成但 metadata 无 bilibili_aid
+      （上传成功但 DB 未记录 aid，可能是上传过程中崩溃）
+    - aid_not_found_on_bilibili: 有 bilibili_aid 但 B站两个 API 都查不到
+      （视频可能已被删除，或 aid 记录错误）
     
     Args:
         db: 数据库实例
@@ -1773,14 +1804,35 @@ def season_sync(db, uploader: BilibiliUploader, playlist_id: str) -> Dict[str, A
             'skipped': int,     # 跳过数（已在合集中）
             'season_ids': set,  # 涉及的合集ID（用于排序）
             'failed_videos': list,  # 失败的 video_id 列表
+            'diagnostics': {    # 诊断结果
+                'upload_completed_no_aid': list,  # (video_id, title) 列表
+                'aid_not_found_on_bilibili': list,  # (video_id, aid, title) 列表
+            }
         }
     """
     from vat.services.playlist_service import PlaylistService
+    from vat.models import TaskStep, TaskStatus
     
     playlist_service = PlaylistService(db)
     videos = playlist_service.get_playlist_videos(playlist_id)
     
-    # 筛选待同步的视频
+    # === 诊断：upload task 已完成但无 bilibili_aid ===
+    upload_completed_no_aid = []
+    for v in videos:
+        meta = v.metadata or {}
+        if not meta.get('bilibili_aid'):
+            if db.is_step_completed(v.id, TaskStep.UPLOAD):
+                upload_completed_no_aid.append((v.id, v.title[:40] if v.title else v.id))
+    
+    if upload_completed_no_aid:
+        logger.warning(
+            f"[诊断] {len(upload_completed_no_aid)} 个视频 upload 已完成但无 bilibili_aid"
+            f"（上传成功但 DB 未记录 aid，需手动核实）:"
+        )
+        for vid, title in upload_completed_no_aid:
+            logger.warning(f"  - {vid}: {title}")
+    
+    # === 筛选待同步的视频 ===
     pending = []
     for v in videos:
         meta = v.metadata or {}
@@ -1798,6 +1850,10 @@ def season_sync(db, uploader: BilibiliUploader, playlist_id: str) -> Dict[str, A
         'skipped': 0,
         'season_ids': set(),
         'failed_videos': [],
+        'diagnostics': {
+            'upload_completed_no_aid': upload_completed_no_aid,
+            'aid_not_found_on_bilibili': [],
+        },
     }
     
     if not pending:
@@ -1809,7 +1865,8 @@ def season_sync(db, uploader: BilibiliUploader, playlist_id: str) -> Dict[str, A
     for i, (video, aid, season_id) in enumerate(pending):
         result['season_ids'].add(season_id)
         try:
-            if uploader.add_to_season(aid, season_id):
+            add_result = uploader.add_to_season(aid, season_id)
+            if add_result:
                 result['success'] += 1
                 # 更新 DB 标记
                 updated_meta = dict(video.metadata or {})
@@ -1828,6 +1885,41 @@ def season_sync(db, uploader: BilibiliUploader, playlist_id: str) -> Dict[str, A
         if i < len(pending) - 1:
             time.sleep(3)
     
+    # === 诊断：检测有 aid 但 B站找不到的视频 ===
+    # 从失败列表中，尝试区分"B站找不到"和"添加接口报错"两种情况
+    # 对失败的视频，主动验证 aid 是否在 B站 存在
+    aid_not_found = []
+    for vid_id in result['failed_videos']:
+        v = next((v for v in videos if v.id == vid_id), None)
+        if not v:
+            continue
+        meta = v.metadata or {}
+        aid = meta.get('bilibili_aid')
+        if not aid:
+            continue
+        # 用创作中心 API 验证（比公共 API 更可靠，支持未发布/审核中视频）
+        try:
+            session = uploader._get_authenticated_session()
+            resp = session.get(
+                'https://member.bilibili.com/x/client/archive/view',
+                params={'aid': int(aid)},
+                timeout=10
+            )
+            data = resp.json()
+            if data.get('code') != 0:
+                aid_not_found.append((vid_id, int(aid), v.title[:40] if v.title else vid_id))
+        except Exception:
+            pass  # 网络异常不算"找不到"
+    
+    if aid_not_found:
+        result['diagnostics']['aid_not_found_on_bilibili'] = aid_not_found
+        logger.warning(
+            f"[诊断] {len(aid_not_found)} 个视频有 bilibili_aid 但 B站查不到"
+            f"（可能已被删除或 aid 记录错误）:"
+        )
+        for vid, aid, title in aid_not_found:
+            logger.warning(f"  - {vid} (av{aid}): {title}")
+    
     # 对涉及的每个合集执行排序
     for season_id in result['season_ids']:
         try:
@@ -1838,9 +1930,18 @@ def season_sync(db, uploader: BilibiliUploader, playlist_id: str) -> Dict[str, A
         except Exception as e:
             logger.warning(f"⚠ 合集 {season_id} 排序异常: {e}")
     
+    # 汇总
+    diag = result['diagnostics']
+    diag_msgs = []
+    if diag['upload_completed_no_aid']:
+        diag_msgs.append(f"{len(diag['upload_completed_no_aid'])} 个 upload 完成但无 aid")
+    if diag['aid_not_found_on_bilibili']:
+        diag_msgs.append(f"{len(diag['aid_not_found_on_bilibili'])} 个 aid 在B站查不到")
+    
+    diag_str = f"，诊断问题: {'; '.join(diag_msgs)}" if diag_msgs else ""
     logger.info(
         f"Season sync 完成: {result['success']} 成功, "
-        f"{result['failed']} 失败, {result['skipped']} 跳过"
+        f"{result['failed']} 失败, {result['skipped']} 跳过{diag_str}"
     )
     return result
 
