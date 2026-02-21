@@ -426,6 +426,7 @@ class BilibiliUploaderConfig:
     cookies_file: str
     line: str = "AUTO"
     threads: int = 3
+    upload_interval: int = 60  # 多视频上传时视频间的等待间隔（秒），防止触发B站风控
     copyright: int = 2  # 1=自制, 2=转载
     default_tid: int = 21
     default_tags: List[str] = field(default_factory=lambda: ["VTuber", "日本"])
@@ -672,6 +673,7 @@ class Config:
             cookies_file=bilibili_conn.get('cookies_file', 'cookies/bilibili/account.json'),
             line=bilibili_conn.get('line', 'AUTO'),
             threads=bilibili_conn.get('threads', 3),
+            upload_interval=bilibili_conn.get('upload_interval', 60),
             # 内容设置（config/upload.yaml）
             copyright=upload_content.copyright,
             default_tid=upload_content.default_tid,

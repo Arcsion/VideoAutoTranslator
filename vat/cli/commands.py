@@ -710,8 +710,13 @@ def process(ctx, video_id, process_all, playlist, stages, gpu, force, dry_run, c
     step_names = [s.value for s in target_steps]
     total = len(video_ids)
     
-    # 确定视频间延迟：CLI 参数优先，否则从配置读取
+    # 确定视频间延迟：
+    # - 包含上传阶段时，使用 upload_interval（防B站风控）和 download_delay 中的较大值
+    # - 仅非上传阶段时，使用 download_delay（防YouTube限流）
     download_delay = delay if delay is not None else config.downloader.youtube.download_delay
+    if TaskStep.UPLOAD in target_steps:
+        upload_interval = config.uploader.bilibili.upload_interval
+        download_delay = max(download_delay, upload_interval)
     
     def process_one_video(args):
         """处理单个视频（可在线程池中并发调用）"""
@@ -1028,8 +1033,14 @@ def _run_scheduled_uploads(config, db, logger, video_ids, cron_expr, force, dry_
                 time.sleep(sleep_chunk)
         
         # 依次上传本批次中的视频
+        upload_interval = config.uploader.bilibili.upload_interval
         logger.info(f"[UPLOAD-SCHEDULE] 开始批次 {batch_idx + 1}/{len(batches)} ({len(batch)} 个视频)")
         for vid in batch:
+            # 视频间等待间隔（防止触发B站风控）
+            if (uploaded + failed) > 0 and upload_interval > 0:
+                logger.info(f"[UPLOAD-SCHEDULE] 等待 {upload_interval}s 后上传下一个视频...")
+                time.sleep(upload_interval)
+            
             video = db.get_video(vid)
             title = video.title[:30] if video and video.title else vid
             logger.info(f"[UPLOAD-SCHEDULE] 上传 ({uploaded + failed + 1}/{len(queue)}): {title}")
@@ -1162,6 +1173,7 @@ def _run_dtime_uploads(config, db, logger, video_ids, cron_expr, force, dry_run,
     # 立即逐个上传，每个视频携带对应的 dtime
     uploaded = 0
     failed = 0
+    upload_interval = config.uploader.bilibili.upload_interval
     
     for batch_idx, (batch, dtime_ts, next_time) in enumerate(batch_dtimes):
         logger.info(
@@ -1169,6 +1181,11 @@ def _run_dtime_uploads(config, db, logger, video_ids, cron_expr, force, dry_run,
             f"(定时发布 @ {next_time.strftime('%Y-%m-%d %H:%M')}, {len(batch)} 个视频)"
         )
         for vid in batch:
+            # 视频间等待间隔（防止触发B站风控）
+            if (uploaded + failed) > 0 and upload_interval > 0:
+                logger.info(f"[DTIME] 等待 {upload_interval}s 后上传下一个视频...")
+                _time.sleep(upload_interval)
+            
             video = db.get_video(vid)
             title = video.title[:30] if video and video.title else vid
             logger.info(f"[DTIME] 上传 ({uploaded + failed + 1}/{len(queue)}): {title}")

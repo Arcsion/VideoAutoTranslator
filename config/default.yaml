@@ -241,6 +241,7 @@ uploader:
     cookies_file: "cookies/bilibili/account.json"  # Cookie文件路径（获取方式: vat bilibili login 或 Web UI）
     line: "AUTO"                            # 上传线路：AUTO/bda2/qn/ws
     threads: 3                              # 上传线程数
+    upload_interval: 60                     # 多视频上传时视频间的等待间隔（秒），防止触发B站风控
     
 # =============================================================================
 # GPU 配置
