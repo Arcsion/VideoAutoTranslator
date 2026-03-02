@@ -50,76 +50,75 @@ MODEL_CONFIGS = {
     "MiniMax-M2.5": {
         "model": "MiniMax-M2.5",
         "api_key": "REDACTED_DASHSCOPE_KEY",
-        "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",  # 国内服务不需要代理
     },
     "kimi-k2.5": {
         "model": "kimi-k2.5",
         "api_key": "REDACTED_DASHSCOPE_KEY",
-        "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
     "qwen3.5-plus": {
         "model": "qwen3.5-plus",
         "api_key": "REDACTED_DASHSCOPE_KEY",
-        "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
     "glm-5": {
         "model": "glm-5",
         "api_key": "REDACTED_DASHSCOPE_KEY",
-        "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
     "qwen3-max": {
         "model": "qwen3-max-2026-01-23",
         "api_key": "REDACTED_DASHSCOPE_KEY",
-        "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
     "glm-4.7": {
         "model": "glm-4.7",
         "api_key": "REDACTED_DASHSCOPE_KEY",
-        "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
-    # ===== 火山引擎 Coding Plan 模型 =====
-    # 注意：base_url 必须用 /api/coding/v3（Coding Plan专用），不是 /api/v3（会产生额外费用）
-    # 文档明确列出的可用模型：kimi-k2.5, deepseek-v3.2, glm-4.7, doubao-seed-2.0-code, doubao-seed-code, kimi-k2-thinking
+    # ===== 火山引擎方舟模型 =====
+    # 可用模型：kimi-k2.5, deepseek-v3.2, glm-4.7, doubao-seed-2.0-code, doubao-seed-code, kimi-k2-thinking
     "volc-kimi-k2.5": {
         "model": "kimi-k2.5",
         "api_key": "REDACTED_VOLC_KEY",
-        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-deepseek-v3.2": {
         "model": "deepseek-v3.2",
         "api_key": "REDACTED_VOLC_KEY",
-        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-glm-4.7": {
         "model": "glm-4.7",
         "api_key": "REDACTED_VOLC_KEY",
-        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-doubao-seed-2.0-code": {
         "model": "doubao-seed-2.0-code",
         "api_key": "REDACTED_VOLC_KEY",
-        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-doubao-seed-code": {
         "model": "doubao-seed-code",
         "api_key": "REDACTED_VOLC_KEY",
-        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-kimi-k2-thinking": {
         "model": "kimi-k2-thinking",
         "api_key": "REDACTED_VOLC_KEY",
-        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
 }

@@ -10,13 +10,13 @@
 当前pipeline使用Google Gemini-3-flash做日语→中文字幕翻译，质量好但成本高。评测了以下替代方案：
 
 | 方案 | 来源 | 月成本 | 独有模型 |
-|------|------|--------|---------|
-| 方舟 Coding Plan (Pro) | 火山引擎(字节) | ¥?/月(90k次) | deepseek-v3.2, doubao系列 |
-| DashScope Coding Plan | 阿里云 | ¥7.9/月(18k次) | qwen3-max, qwen3.5-plus, glm-5, MiniMax-M2.5 |
+|------|------|--------|--------|
+| 火山引擎方舟 | 火山引擎(字节) | 按量付费 | deepseek-v3.2, doubao系列 |
+| DashScope | 阿里云 | 按量付费 | qwen3-max, qwen3.5-plus, glm-5, MiniMax-M2.5 |
 | gpt-5-nano | videocaptioner中转站 | 按量付费 | gpt-5-nano |
 | Gemini-3-flash | Google API | ~¥150/20k次 | Gemini-3-flash |
 
-两个 Coding Plan 共有模型：kimi-k2.5, glm-4.7。跨厂商验证确认同模型质量完全一致。
+火山引擎与 DashScope 共有模型：kimi-k2.5, glm-4.7。跨厂商验证确认同模型质量完全一致。
 
 ---
 
@@ -75,22 +75,22 @@
 
 | 排名 | 模型 | 来源 | 翻译风格 | 速度(155条) | 推荐度 |
 |------|------|------|---------|------------|--------|
-| 1 | **kimi-k2.5** | 火山/DashScope | 最活泼可爱，VTuber味浓 | 176s | ⭐⭐⭐⭐½ |
-| 2 | **deepseek-v3.2** | 火山独有 | 语义准确，风格偏正经 | 145s | ⭐⭐⭐⭐ |
-| 3 | **qwen3-max** | DashScope独有 | 自然流畅，偶尔更准确 | ~180s | ⭐⭐⭐⭐ |
-| 4 | qwen3.5-plus | DashScope独有 | 偏正式/平淡 | 慢 | ⭐⭐⭐ |
-| 5 | doubao-seed-code | 火山独有 | 中规中矩 | 93s(50条) | ⭐⭐⭐ |
+| 1 | **kimi-k2.5** | **火山引擎方舟** | 最活泼可爱，VTuber味浓 | 176s | ⭐⭐⭐⭐½ |
+| 2 | **deepseek-v3.2** | **火山引擎方舟** | 语义准确，风格偏正经 | 145s | ⭐⭐⭐⭐ |
+| 3 | **qwen3-max** | **DashScope** | 自然流畅，偶尔更准确 | ~180s | ⭐⭐⭐⭐ |
+| 4 | qwen3.5-plus | DashScope | 偏正式/平淡 | 慢 | ⭐⭐⭐ |
+| 5 | doubao-seed-code | 火山引擎方舟 | 中规中矩 | 93s(50条) | ⭐⭐⭐ |
 | 6 | gpt-5-nano | 中转站 | 平淡，招牌语丢失 | 快 | ⭐⭐⭐ |
-| 7 | glm-5 | DashScope独有 | 可用但无特色 | 很慢 | ⭐⭐½ |
-| 8 | doubao-seed-2.0-code | 火山独有 | 最快但有错译风险 | 59s(50条) | ⭐⭐½ |
-| 9 | MiniMax-M2.5 | DashScope独有 | optimize无效，翻译勉强 | 快 | ⭐⭐ |
-| - | glm-4.7 | 火山/DashScope | 可用但太慢(668s/50条) | - | ⭐ |
-| - | kimi-k2-thinking | 火山独有 | 翻译任务失败 | - | ❌ |
-| - | auto | 火山 | 不支持Coding Plan | - | ❌ |
+| 7 | glm-5 | DashScope | 可用但无特色 | 很慢 | ⭐⭐½ |
+| 8 | doubao-seed-2.0-code | 火山引擎方舟 | 最快但有错译风险 | 59s(50条) | ⭐⭐½ |
+| 9 | MiniMax-M2.5 | DashScope | optimize无效，翻译勉强 | 快 | ⭐⭐ |
+| - | glm-4.7 | 火山引擎方舟/DashScope | 可用但太慢(668s/50条) | - | ⭐ |
+| - | kimi-k2-thinking | 火山引擎方舟 | 翻译任务失败 | - | ❌ |
+| - | auto | 火山引擎方舟 | 不支持指定模型 | - | ❌ |
 
 ### kimi-k2.5 vs deepseek-v3.2 关键差异
 
-两者都是火山引擎 Coding Plan 的推荐模型，风格取向不同：
+两者都是火山引擎方舟的可用模型，风格取向不同：
 
 | 案例 | DeepSeek | Kimi | 判定 |
 |------|----------|------|------|
@@ -269,7 +269,7 @@ asr:
 | 环节 | 推荐模型 | 来源 | 理由 |
 |------|---------|------|------|
 | **翻译(translate)** | gemini-3-flash | Google API | 质量最优，ASR纠错能力强 |
-| **优化(optimize)** | **kimi-k2.5** | **火山引擎 Coding Plan** | **已集成**。同语言optimize阶段有良好ASR纠错能力 |
+| **优化(optimize)** | **kimi-k2.5** | **火山引擎方舟** | **已集成**。同语言optimize阶段有良好ASR纠错能力 |
 | **断句(split)** | gpt-4o-mini | 中转站 | 测试国产模型效果不佳（过度断句），保持不变 |
 | **场景识别** | gpt-4o-mini | 中转站 | 对模型要求低 |
 
@@ -355,7 +355,7 @@ translator.llm.thread_num: 10
 
 # optimize: 火山引擎 kimi-k2.5（已替换，节省Gemini额度）
 translator.llm.optimize.model: kimi-k2.5
-translator.llm.optimize.base_url: ark.cn-beijing.volces.com/api/coding/v3
+translator.llm.optimize.base_url: ark.cn-beijing.volces.com/api/v3
 translator.llm.optimize.batch_size: 100
 translator.llm.optimize.thread_num: 3
 
@@ -370,11 +370,11 @@ Few-shot prompt文件：`scripts/translation_benchmark_prompts/custom_translate_
 
 ### 成本对比
 
-| 方案 | 月费 | 翻译质量 | 月产能(~200条/视频) |
-|------|------|---------|-------------------|
+| 方案 | 月费 | 翻译质量 | 备注 |
+|------|------|---------|------|
 | Gemini-3-flash | ~¥150/20k次 | ⭐⭐⭐⭐⭐ | 取决于额度 |
-| **方舟 Coding Plan (Pro)** | **~¥?/月** | **⭐⭐⭐⭐** | **~90k次请求** |
-| DashScope kimi-k2.5 | ¥7.9/月 | ⭐⭐⭐⭐ | ~18k次请求(Lite) |
+| **火山引擎 kimi-k2.5** | **按量付费** | **⭐⭐⭐⭐** | **推荐 optimize 用** |
+| DashScope kimi-k2.5 | 按量付费 | ⭐⭐⭐⭐ | 备用 |
 | 中转站 nano | 按量付费 | ⭐⭐⭐ | 取决于余额 |
 
 ### 混合方案可行性
@@ -403,19 +403,18 @@ Few-shot prompt文件：`scripts/translation_benchmark_prompts/custom_translate_
 
 ---
 
-## 十、API套餐信息
+## 十、API 端点信息
 
-| 套餐 | 提供商 | Base URL | 额度 | 主要用途 |
-|------|--------|----------|------|---------|
-| 方舟 Coding Plan (Pro) | 火山引擎 | `https://ark.cn-beijing.volces.com/api/coding/v3` | ~90k次/月 | **主力翻译** |
-| DashScope Coding Plan | 阿里云 | `https://coding.dashscope.aliyuncs.com/v1` | ~18k次/月(Lite) | 备用 |
-| videocaptioner中转站 | 第三方 | `https://api.videocaptioner.cn` | 按量 | split/scene_identify |
+| 服务 | 提供商 | Base URL | 主要用途 |
+|------|--------|----------|--------|
+| 火山引擎方舟 | 火山引擎 | `https://ark.cn-beijing.volces.com/api/v3` | **optimize 主力** |
+| DashScope | 阿里云 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 备用 |
+| videocaptioner中转站 | 第三方 | `https://api.videocaptioner.cn` | split/scene_identify |
 
 **注意**：
-- 火山引擎必须用 `/api/coding/v3`（非 `/api/v3`，后者会产生额外费用）
 - 火山引擎 thinking 自动关闭已内置到 `call_llm`（`vat/llm/client.py`），无需手动配置
 - 环境变量 `VAT_VOLC_APIKEY` 需要设置火山引擎 API Key
-- 所有API密钥通过环境变量管理，不写入代码/配置的明文中
+- 所有 API 密钥通过环境变量管理，不写入代码/配置的明文中
 
 ---
 

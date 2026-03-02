@@ -179,14 +179,14 @@ translator:
     enable_context: true                    # 是否启用前文上下文（新增）
     
     # Optimize 配置（嵌套）- 字幕优化
-    # 使用火山引擎 Coding Plan，kimi-k2.5 在同语言 optimize 阶段有良好的 ASR 纠错能力
+    # 使用火山引擎方舟 kimi-k2.5，在同语言 optimize 阶段有良好的 ASR 纠错能力
     # 测试验证：能修正人名(キュウリさん→フブキさん)、自我介绍(ちらかみむむき→白上フブキ)等
     optimize:
       enable: true                          # 是否启用字幕优化（修正错别字、统一术语）
       custom_prompt: "fubuki"                     # 优化自定义提示词文件名
-      model: "kimi-k2.5"                          # 优化模型（火山引擎 Coding Plan）
+      model: "kimi-k2.5"                          # 优化模型（火山引擎方舟）
       api_key: "${VAT_VOLC_APIKEY}"               # 火山引擎 API Key
-      base_url: "https://ark.cn-beijing.volces.com/api/coding/v3"  # 火山引擎 Coding Plan Base URL（必须用 /api/coding/v3）
+      base_url: "https://ark.cn-beijing.volces.com/api/v3"  # 火山引擎方舟 API
       batch_size: 100                        # 覆写批大小（大 BS 减少 API 调用次数）
       thread_num: 3                          # 覆写线程数（火山引擎建议低并发）
   

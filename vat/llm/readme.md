@@ -38,7 +38,7 @@ call_llm(messages, model="gpt-4o-mini")
 
 # 火山引擎端点（指定 base_url + api_key）
 call_llm(messages, model="kimi-k2.5",
-         base_url="https://ark.cn-beijing.volces.com/api/coding/v3",
+         base_url="https://ark.cn-beijing.volces.com/api/v3",
          api_key=os.getenv("VAT_VOLC_APIKEY"))
 
 # Google Gemini（通过代理）

@@ -11,7 +11,7 @@
 | 阶段 | 当前模型 | 来源 | 说明 |
 |------|---------|------|------|
 | Split（断句） | gpt-4o-mini | 中转站 | 断句对模型要求低；国产模型测试过度断句（在日语条件句ば后、宾格を后错误断开） |
-| Optimize（优化） | kimi-k2.5 | 火山引擎 Coding Plan | 同语言 ASR 纠错能力好（能修正人名、自我介绍等），节省 Gemini 额度 |
+| Optimize（优化） | kimi-k2.5 | 火山引擎方舟 | 同语言 ASR 纠错能力好（能修正人名、自我介绍等），节省 Gemini 额度 |
 | Translate（翻译） | gemini-3-flash | Google API | 质量最优，ASR 乱码纠错能力无可替代 |
 
 详细评测数据见 [翻译评测报告](TRANSLATION_AND_ASR_EVALUATION.md)。
