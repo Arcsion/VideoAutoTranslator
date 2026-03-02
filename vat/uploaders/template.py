@@ -162,7 +162,7 @@ def build_upload_context(
     context = {
         # 基础信息
         'video_id': video_id,
-        'source_url': video_record.source_url or f"https://www.youtube.com/watch?v={video_id}",
+        'source_url': video_record.source_url or '',
         'today': datetime.now().strftime('%Y-%m-%d'),
         
         # 频道信息

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 from yt_dlp import YoutubeDL
 
-from .base import BaseDownloader
+from .base import PlatformDownloader
 from vat.utils.logger import setup_logger
 
 logger = setup_logger("downloader.youtube")
@@ -192,8 +192,12 @@ class YtDlpLogger:
     def error(self, msg):
         logger.error(msg)
 
-class YouTubeDownloader(BaseDownloader):
+class YouTubeDownloader(PlatformDownloader):
     """YouTube视频下载器"""
+    
+    @property
+    def guaranteed_fields(self) -> set:
+        return {'title', 'duration', 'description', 'uploader', 'thumbnail'}
     
     def __init__(self, proxy: str = None, video_format: str = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
                  cookies_file: str = "", remote_components: List[str] = None):
@@ -507,21 +511,17 @@ class YouTubeDownloader(BaseDownloader):
             
             return []
     
-    def validate_url(self, url: str) -> bool:
-        """
-        验证URL是否为有效的YouTube URL
-        
-        Args:
-            url: 要验证的URL
-            
-        Returns:
-            是否为有效的YouTube URL
-        """
+    def validate_source(self, source: str) -> bool:
+        """验证源是否为有效的YouTube URL"""
         return bool(
-            self.video_pattern.match(url) or 
-            self.playlist_pattern.match(url) or
-            self.channel_pattern.match(url)
+            self.video_pattern.match(source) or 
+            self.playlist_pattern.match(source) or
+            self.channel_pattern.match(source)
         )
+    
+    def validate_url(self, url: str) -> bool:
+        """validate_source 的兼容别名"""
+        return self.validate_source(url)
     
     def extract_video_id(self, url: str) -> Optional[str]:
         """

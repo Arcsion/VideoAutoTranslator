@@ -18,7 +18,7 @@ from ..models import (
 )
 from ..database import Database
 from ..config import Config
-from ..downloaders import YouTubeDownloader
+from ..downloaders import YouTubeDownloader, BaseDownloader, LocalImporter, DirectURLDownloader
 from ..asr import WhisperASR, ASRData, ASRDataSeg, write_srt, write_ass, split_by_llm, ASRPostProcessor
 from ..asr.vocal_separation import VocalSeparator, VocalSeparationResult
 from ..translator import LLMTranslator
@@ -151,16 +151,30 @@ class VideoProcessor:
         return callback
     
     @property
-    def downloader(self) -> YouTubeDownloader:
-        """延迟初始化下载器"""
+    def downloader(self) -> BaseDownloader:
+        """延迟初始化下载器（根据 source_type 选择对应实现）"""
         if self._downloader is None:
-            self._downloader = YouTubeDownloader(
+            self._downloader = self._init_downloader()
+        return self._downloader
+    
+    def _init_downloader(self) -> BaseDownloader:
+        """根据 source_type 初始化对应的下载器"""
+        st = self.video.source_type
+        if st == SourceType.YOUTUBE:
+            return YouTubeDownloader(
                 proxy=self.config.get_stage_proxy("downloader"),
                 video_format=self.config.downloader.youtube.format,
                 cookies_file=self.config.downloader.youtube.cookies_file,
                 remote_components=self.config.downloader.youtube.remote_components,
             )
-        return self._downloader
+        elif st == SourceType.LOCAL:
+            return LocalImporter()
+        elif st == SourceType.DIRECT_URL:
+            return DirectURLDownloader(
+                proxy=self.config.get_stage_proxy("downloader"),
+            )
+        else:
+            raise ValueError(f"不支持的视频来源类型: {st}")
     
     @property
     def asr(self) -> WhisperASR:
@@ -513,211 +527,200 @@ class VideoProcessor:
         return handler()
     
     def _run_download(self) -> bool:
-        """下载视频"""
-        if self.video.source_type == SourceType.LOCAL:
-            self.progress_callback("本地文件，跳过下载")
-            if not Path(self.video.source_url).exists():
-                raise DownloadError(f"本地视频文件不存在: {self.video.source_url}")
-            return True
+        """下载/导入视频（线性化流程，按数据可用性执行各步骤）
         
+        所有 source_type 走同一路径：
+        1. 委托下载器执行下载/导入
+        2. 验证 guaranteed_fields 契约
+        3. 处理字幕信息
+        4. 场景识别（需要 title）
+        5. 视频信息翻译（需要 title）
+        6. 下载封面（需要 thumbnail URL）
+        7. 更新 DB
+        """
+        self._progress_with_tracker(f"开始处理视频: {self.video.source_url}")
+        
+        # === Step 1: 委托下载器执行 ===
+        # 按 source_type 构建各下载器认识的参数
+        download_kwargs = {}
         if self.video.source_type == SourceType.YOUTUBE:
-            self._progress_with_tracker(f"开始下载YouTube视频: {self.video.source_url}")
-            
-            # 从配置获取字幕下载设置
             yt_config = self.config.downloader.youtube
-            download_subs = yt_config.download_subtitles
-            sub_langs = yt_config.subtitle_languages
-            
-            try:
-                # 获取跨进程下载锁（同一时间只允许一个进程下载，防止 YouTube 限流）
-                download_cooldown = self.config.downloader.youtube.download_delay
-                with resource_lock(
-                    db_path=str(self.db.db_path),
-                    resource_type='youtube_download',
-                    cooldown_seconds=download_cooldown,
-                    timeout_seconds=600,
-                    lock_ttl_seconds=1800,
-                ):
-                    result = self.downloader.download(
-                        self.video.source_url,
-                        self.output_dir,
-                        download_subs=download_subs,
-                        sub_langs=sub_langs
-                    )
-                
-                if 'video_path' not in result:
-                    raise DownloadError("下载器未返回视频路径")
-                    
-                video_path = Path(result['video_path'])
-                if not video_path.exists():
-                    raise DownloadError(f"下载的文件不存在: {video_path}")
-                
-                # 报告进度：视频下载完成 (60%)
-                if self._progress_tracker:
-                    self._progress_tracker.report_event(ProgressEvent.DOWNLOAD_VIDEO_DONE, "视频下载完成")
-                
-                # 更新视频信息（merge，保留 playlist sync 阶段写入的字段如 thumbnail）
-                existing_metadata = self.video.metadata or {}
-                metadata = {**existing_metadata, **result.get('metadata', {})}
-                title = result.get('title', '')
-                if not title:
-                    raise DownloadError("下载器未返回视频标题（title），数据异常")
-                
-                # 处理 YouTube 字幕（如果有）
-                subtitles = result.get('subtitles', {})
-                available_manual = metadata.get('available_subtitles', [])
-                available_auto = metadata.get('available_auto_subtitles', [])
-                
-                if subtitles:
-                    self.progress_callback(f"已获取 YouTube 字幕: {list(subtitles.keys())}")
-                    # 存储字幕路径到 metadata
-                    metadata['youtube_subtitles'] = {
-                        lang: str(path) for lang, path in subtitles.items()
-                    }
-                
-                # 记录可用字幕语言
-                metadata['available_subtitles'] = available_manual
-                metadata['available_auto_subtitles'] = available_auto
-                
-                # 检测人工字幕并决定字幕来源
-                target_lang = self.config.asr.language or 'ja'
-                has_manual_target = target_lang in available_manual
-                has_auto_target = target_lang in available_auto
-                
-                # 检查是否下载到了目标语言的人工字幕
-                manual_sub_path = subtitles.get(target_lang)
-                if manual_sub_path and Path(manual_sub_path).exists() and has_manual_target:
-                    metadata['subtitle_source'] = 'manual'
-                    metadata['manual_subtitle_path'] = str(manual_sub_path)
-                    self.progress_callback(f"✓ 检测到人工{target_lang}字幕，将跳过ASR")
-                elif has_auto_target:
-                    metadata['subtitle_source'] = 'auto'
-                    self.progress_callback(f"检测到自动{target_lang}字幕，将使用ASR")
-                else:
-                    metadata['subtitle_source'] = 'asr'
-                
-                # 场景识别（新增）+ 存储完整的视频信息冗余
-                if title:
-                    self.progress_callback("正在识别视频场景...")
-                    try:
-                        from vat.llm.scene_identifier import SceneIdentifier
-                        
-                        si_cfg = self.config.downloader.scene_identify
-                        identifier = SceneIdentifier(
-                            model=si_cfg.model or self.config.llm.model,
-                            api_key=si_cfg.api_key,
-                            base_url=si_cfg.base_url,
-                            proxy=self.config.get_stage_proxy("scene_identify") or "",
-                        )
-                        description = metadata.get('description', '')
-                        scene_info = identifier.detect_scene(title, description)
-                        
-                        # 存入 metadata（新增：完整的视频信息冗余存储）
-                        metadata['scene'] = scene_info['scene_id']
-                        metadata['scene_name'] = scene_info['scene_name']
-                        metadata['scene_auto_detected'] = scene_info['auto_detected']
-                        
-                        # 增强 metadata：存储完整的视频信息副本以便后续使用
-                        # （包括：视频ID、URL、作者、简介、时长、上传时间等）
-                        metadata['_video_info'] = {
-                            'video_id': metadata.get('video_id', ''),
-                            'url': metadata.get('url', self.video.source_url),
-                            'title': title,
-                            'uploader': metadata.get('uploader', ''),
-                            'description': description,
-                            'duration': metadata.get('duration', 0),
-                            'upload_date': metadata.get('upload_date', ''),
-                            'thumbnail': metadata.get('thumbnail', ''),
-                        }
-                        
-                        self.progress_callback(
-                            f"场景识别: {scene_info['scene_name']} ({scene_info['scene_id']})"
-                        )
-                    except Exception as e:
-                        self.logger.error(f"场景识别异常: {e}")
-                        # 场景识别失败不影响下载流程，设置默认场景
-                        metadata['scene'] = 'chatting'
-                        metadata['scene_name'] = '闲聊直播'
-                        metadata['scene_auto_detected'] = False
-                        # 即使识别失败，也存储视频信息冗余
-                        metadata['_video_info'] = {
-                            'video_id': metadata.get('video_id', ''),
-                            'url': metadata.get('url', self.video.source_url),
-                            'title': title,
-                            'uploader': metadata.get('uploader', ''),
-                            'description': metadata.get('description', ''),
-                            'duration': metadata.get('duration', 0),
-                            'upload_date': metadata.get('upload_date', ''),
-                            'thumbnail': metadata.get('thumbnail', ''),
-                        }
-                    
-                    # 视频信息翻译（用于后续上传到B站）
-                    # 检查是否已有翻译结果（可能在 sync 阶段异步翻译完成）
-                    existing_translated = self.video.metadata.get('translated') if self.video.metadata else None
-                    
-                    if existing_translated and not self.force:
-                        self.progress_callback("复用已有的视频信息翻译结果")
-                        metadata['translated'] = existing_translated
-                    elif self.config.llm.is_available():
-                        self.progress_callback("正在翻译视频信息...")
-                        try:
-                            from vat.llm.video_info_translator import VideoInfoTranslator
-                            
-                            vit_cfg = self.config.downloader.video_info_translate
-                            translator = VideoInfoTranslator(
-                                model=vit_cfg.model or self.config.llm.model,
-                                api_key=vit_cfg.api_key,
-                                base_url=vit_cfg.base_url,
-                                proxy=self.config.get_stage_proxy("video_info_translate") or "",
-                            )
-                            description = metadata.get('description', '')
-                            tags = metadata.get('tags', [])
-                            uploader = metadata.get('uploader', '')
-                            if not uploader:
-                                self.logger.warning("metadata 中 uploader 缺失，翻译质量可能下降")
-                            
-                            translated_info = translator.translate(
-                                title=title,
-                                description=description,
-                                tags=tags,
-                                uploader=uploader
-                            )
-                            
-                            # 存储翻译结果到metadata
-                            metadata['translated'] = translated_info.to_dict()
-                            self._progress_with_tracker(
-                                f"视频信息翻译完成，推荐分区: {translated_info.recommended_tid_name}"
-                            )
-                        except Exception as e:
-                            self.logger.warning(f"视频信息翻译失败: {e}")
-                            # 翻译失败不影响下载流程
-                    else:
-                        self.logger.info("LLM配置不可用，跳过视频信息翻译")
-                    
-                    # 报告进度：翻译完成 (20%)
-                    if self._progress_tracker:
-                        self._progress_tracker.report_event(ProgressEvent.DOWNLOAD_TRANSLATE_DONE)
-                
-                # 下载封面到本地（上传时优先使用本地文件，避免临时下载）
-                thumbnail_url = metadata.get('thumbnail', '')
-                if thumbnail_url:
-                    self._download_thumbnail(thumbnail_url)
-                
-                self.db.update_video(
-                    self.video_id,
-                    title=title,
-                    metadata=metadata
-                )
-                
-                self._progress_with_tracker(f"下载完成: {result['video_path']}")
-                return True
-                
-            except Exception as e:
-                error_msg = f"下载失败: {e}"
-                self.progress_callback(error_msg)
-                raise DownloadError(error_msg, original_error=e)
+            download_kwargs['download_subs'] = yt_config.download_subtitles
+            download_kwargs['sub_langs'] = yt_config.subtitle_languages
+        else:
+            # LOCAL / DIRECT_URL 支持 title + progress_callback
+            if self.video.title:
+                download_kwargs['title'] = self.video.title
+            download_kwargs['progress_callback'] = self.progress_callback
         
-        raise DownloadError(f"不支持的视频来源类型: {self.video.source_type}")
+        try:
+            result = self.downloader.download(
+                self.video.source_url,
+                self.output_dir,
+                **download_kwargs
+            )
+        except Exception as e:
+            raise DownloadError(f"下载失败: {e}", original_error=e)
+        
+        if 'video_path' not in result:
+            raise DownloadError("下载器未返回视频路径")
+        
+        video_path = Path(result['video_path'])
+        if not video_path.exists():
+            raise DownloadError(f"下载/导入后文件不存在: {video_path}")
+        
+        # 报告进度：视频下载完成 (60%)
+        if self._progress_tracker:
+            self._progress_tracker.report_event(ProgressEvent.DOWNLOAD_VIDEO_DONE, "视频下载完成")
+        
+        # === Step 2: 验证 guaranteed_fields 契约 ===
+        result_metadata = result.get('metadata', {})
+        for field in self.downloader.guaranteed_fields:
+            value = result.get(field) or result_metadata.get(field)
+            if value is None or value == '' or value == 0:
+                raise DownloadError(
+                    f"[数据契约违反] {type(self.downloader).__name__} 保证返回 '{field}' "
+                    f"但实际为空/缺失/零值。这是下载器实现 bug。"
+                )
+        
+        # === Step 3: 提取核心数据 ===
+        # merge metadata（保留 playlist sync 阶段写入的字段如 thumbnail）
+        existing_metadata = self.video.metadata or {}
+        metadata = {**existing_metadata, **result_metadata}
+        title = result.get('title', '')
+        subtitles = result.get('subtitles', {})
+        
+        # === Step 4: 处理字幕信息（按数据可用性） ===
+        available_manual = metadata.get('available_subtitles', [])
+        available_auto = metadata.get('available_auto_subtitles', [])
+        
+        if subtitles:
+            self.progress_callback(f"已获取字幕: {list(subtitles.keys())}")
+            metadata['youtube_subtitles'] = {
+                lang: str(path) for lang, path in subtitles.items()
+            }
+        
+        metadata['available_subtitles'] = available_manual
+        metadata['available_auto_subtitles'] = available_auto
+        
+        # 决定字幕来源（如果已设置则保留，否则按数据可用性判断）
+        if 'subtitle_source' not in metadata:
+            target_lang = self.config.asr.language or 'ja'
+            manual_sub_path = subtitles.get(target_lang)
+            has_manual_target = target_lang in available_manual
+            has_auto_target = target_lang in available_auto
+            
+            if manual_sub_path and Path(manual_sub_path).exists() and has_manual_target:
+                metadata['subtitle_source'] = 'manual'
+                metadata['manual_subtitle_path'] = str(manual_sub_path)
+                self.progress_callback(f"✓ 检测到人工{target_lang}字幕，将跳过ASR")
+            elif has_auto_target:
+                metadata['subtitle_source'] = 'auto'
+                self.progress_callback(f"检测到自动{target_lang}字幕，将使用ASR")
+            else:
+                metadata['subtitle_source'] = 'asr'
+        
+        # === Step 5: 场景识别（需要 title） ===
+        if title:
+            self.progress_callback("正在识别视频场景...")
+            try:
+                from vat.llm.scene_identifier import SceneIdentifier
+                
+                si_cfg = self.config.downloader.scene_identify
+                identifier = SceneIdentifier(
+                    model=si_cfg.model or self.config.llm.model,
+                    api_key=si_cfg.api_key,
+                    base_url=si_cfg.base_url,
+                    proxy=self.config.get_stage_proxy("scene_identify") or "",
+                )
+                description = metadata.get('description', '')
+                scene_info = identifier.detect_scene(title, description)
+                
+                metadata['scene'] = scene_info['scene_id']
+                metadata['scene_name'] = scene_info['scene_name']
+                metadata['scene_auto_detected'] = scene_info['auto_detected']
+                
+                self.progress_callback(
+                    f"场景识别: {scene_info['scene_name']} ({scene_info['scene_id']})"
+                )
+            except Exception as e:
+                self.logger.error(f"场景识别异常: {e}")
+                metadata['scene'] = 'chatting'
+                metadata['scene_name'] = '闲聊直播'
+                metadata['scene_auto_detected'] = False
+            
+            # 存储完整的视频信息副本（不论场景识别成功与否）
+            metadata['_video_info'] = {
+                'video_id': metadata.get('video_id', ''),
+                'url': metadata.get('url', self.video.source_url),
+                'title': title,
+                'uploader': metadata.get('uploader', ''),
+                'description': metadata.get('description', ''),
+                'duration': metadata.get('duration', 0),
+                'upload_date': metadata.get('upload_date', ''),
+                'thumbnail': metadata.get('thumbnail', ''),
+            }
+            
+            # === Step 6: 视频信息翻译（需要 title） ===
+            existing_translated = self.video.metadata.get('translated') if self.video.metadata else None
+            
+            if existing_translated and not self.force:
+                self.progress_callback("复用已有的视频信息翻译结果")
+                metadata['translated'] = existing_translated
+            elif self.config.llm.is_available():
+                self.progress_callback("正在翻译视频信息...")
+                try:
+                    from vat.llm.video_info_translator import VideoInfoTranslator
+                    
+                    vit_cfg = self.config.downloader.video_info_translate
+                    translator = VideoInfoTranslator(
+                        model=vit_cfg.model or self.config.llm.model,
+                        api_key=vit_cfg.api_key,
+                        base_url=vit_cfg.base_url,
+                        proxy=self.config.get_stage_proxy("video_info_translate") or "",
+                    )
+                    description = metadata.get('description', '')
+                    tags = metadata.get('tags', [])
+                    uploader = metadata.get('uploader', '')
+                    if not uploader:
+                        self.logger.warning("metadata 中 uploader 缺失，翻译质量可能下降")
+                    
+                    translated_info = translator.translate(
+                        title=title,
+                        description=description,
+                        tags=tags,
+                        uploader=uploader
+                    )
+                    
+                    metadata['translated'] = translated_info.to_dict()
+                    self._progress_with_tracker(
+                        f"视频信息翻译完成，推荐分区: {translated_info.recommended_tid_name}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"视频信息翻译失败: {e}")
+            else:
+                self.logger.info("LLM配置不可用，跳过视频信息翻译")
+            
+            # 报告进度：翻译完成 (20%)
+            if self._progress_tracker:
+                self._progress_tracker.report_event(ProgressEvent.DOWNLOAD_TRANSLATE_DONE)
+        else:
+            self.progress_callback("无标题信息，跳过场景识别和视频信息翻译")
+        
+        # === Step 7: 下载封面（需要 thumbnail URL） ===
+        thumbnail_url = metadata.get('thumbnail', '')
+        if thumbnail_url:
+            self._download_thumbnail(thumbnail_url)
+        
+        # === Step 8: 更新 DB ===
+        self.db.update_video(
+            self.video_id,
+            title=title or self.video.title,  # 保留已有标题
+            metadata=metadata
+        )
+        
+        self._progress_with_tracker(f"下载完成: {result['video_path']}")
+        return True
     
     def _download_thumbnail(self, thumbnail_url: str) -> None:
         """下载封面图片到本地 output_dir/thumbnail.{ext}
@@ -2149,23 +2152,19 @@ class VideoProcessor:
         return config_dict
     
     def _find_video_file(self) -> Optional[Path]:
-        """查找视频文件"""
-        # 如果是本地文件，直接返回源路径
-        if self.video.source_type == SourceType.LOCAL:
-            source_path = Path(self.video.source_url)
-            if source_path.exists():
-                return source_path
+        """查找视频文件
         
-        # 在输出目录中查找
-        video_extensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov']
+        所有 source_type 统一在 output_dir 中查找（LOCAL 也通过软链接存在于 output_dir）。
+        """
+        video_extensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.ts', '.m4v']
         
-        # 首先查找original.*
+        # 首先查找 original.*
         for ext in video_extensions:
             video_file = self.output_dir / f"original{ext}"
             if video_file.exists():
                 return video_file
         
-        # 查找任何视频文件（排除final.*）
+        # 查找任何视频文件（排除 final.*）
         for ext in video_extensions:
             for video_file in self.output_dir.glob(f"*{ext}"):
                 if not video_file.name.startswith("final."):
@@ -2174,24 +2173,70 @@ class VideoProcessor:
         return None
 
 
-def create_video_from_url(
-    url: str,
-    db: Database,
-    source_type: SourceType = SourceType.YOUTUBE
-) -> str:
+def detect_source_type(source: str) -> SourceType:
+    """自动检测视频源类型
+    
+    检测规则（按优先级）：
+    1. 本地文件路径（以 / 或 ~ 开头，或包含路径分隔符且不含 ://）→ LOCAL
+    2. YouTube URL → YOUTUBE
+    3. Bilibili URL → BILIBILI
+    4. 其他 HTTP/HTTPS URL → DIRECT_URL
+    5. 无法识别 → 抛出 ValueError
     """
-    从URL创建视频记录
+    import re
+    
+    source = source.strip()
+    
+    # 本地文件路径
+    if source.startswith('/') or source.startswith('~'):
+        return SourceType.LOCAL
+    
+    # URL 类型
+    if source.startswith(('http://', 'https://')):
+        # YouTube
+        if re.search(r'(youtube\.com|youtu\.be)/', source):
+            return SourceType.YOUTUBE
+        # Bilibili
+        if re.search(r'bilibili\.com/', source):
+            return SourceType.BILIBILI
+        # 其他 HTTP/HTTPS → 直链
+        return SourceType.DIRECT_URL
+    
+    raise ValueError(
+        f"无法识别的视频源: {source}\n"
+        f"支持的格式: 本地路径(/path/to/file)、YouTube URL、Bilibili URL、HTTP/HTTPS 直链"
+    )
+
+
+def create_video_from_source(
+    source: str,
+    db: Database,
+    source_type: SourceType,
+    title: str = ""
+) -> str:
+    """从任意来源创建视频记录
     
     Args:
-        url: 视频URL
+        source: 视频源（URL 或本地文件路径）
         db: 数据库实例
         source_type: 来源类型
+        title: 手动指定标题（可选）
         
     Returns:
-        视频ID
+        视频 ID
     """
-    # 生成视频ID
-    video_id = hashlib.md5(url.encode()).hexdigest()[:16]
+    # 生成视频 ID
+    if source_type == SourceType.LOCAL:
+        # 本地文件：基于内容哈希
+        from vat.downloaders.local import generate_content_based_id
+        source_path = Path(source).resolve()
+        assert source_path.exists(), f"本地视频文件不存在: {source}"
+        video_id = generate_content_based_id(source_path)
+        # 规范化为绝对路径
+        source = str(source_path)
+    else:
+        # URL 类型：基于 URL 哈希
+        video_id = hashlib.md5(source.encode()).hexdigest()[:16]
     
     # 检查视频是否已存在，清理旧任务记录避免重复
     existing = db.get_video(video_id)
@@ -2206,7 +2251,8 @@ def create_video_from_url(
     video = Video(
         id=video_id,
         source_type=source_type,
-        source_url=url
+        source_url=source,
+        title=title or None,
     )
     
     db.add_video(video)
@@ -2221,3 +2267,12 @@ def create_video_from_url(
         db.add_task(task)
     
     return video_id
+
+
+def create_video_from_url(
+    url: str,
+    db: Database,
+    source_type: SourceType = SourceType.YOUTUBE
+) -> str:
+    """兼容别名：从 URL 创建视频记录（内部委托 create_video_from_source）"""
+    return create_video_from_source(url, db, source_type)

@@ -37,8 +37,9 @@ class VideoListResponse(BaseModel):
 
 class AddVideoRequest(BaseModel):
     """添加视频请求"""
-    url: str
-    source_type: str = "youtube"
+    url: str                          # 视频源（URL 或本地路径）
+    source_type: str = "auto"         # auto = 自动检测
+    title: Optional[str] = None       # 可选手动标题
 
 
 
@@ -147,19 +148,25 @@ async def get_video(video_id: str, db: Database = Depends(get_db)):
 
 @router.post("")
 async def add_video(request: AddVideoRequest, db: Database = Depends(get_db)):
-    """添加视频（URL/本地路径）"""
-    from vat.pipeline import create_video_from_url
+    """添加视频（URL/本地路径，支持自动检测源类型）"""
+    from vat.pipeline import create_video_from_source, detect_source_type
     
     try:
-        source_type = SourceType(request.source_type)
-    except ValueError:
-        raise HTTPException(400, f"Invalid source_type: {request.source_type}")
+        if request.source_type == "auto":
+            source_type = detect_source_type(request.url)
+        else:
+            source_type = SourceType(request.source_type)
+    except ValueError as e:
+        raise HTTPException(400, f"无效的 source_type 或无法识别的视频源: {e}")
     
     try:
-        video_id = create_video_from_url(request.url, db, source_type)
-        return {"video_id": video_id, "status": "created"}
+        video_id = create_video_from_source(
+            request.url, db, source_type, title=request.title or ""
+        )
+        return {"video_id": video_id, "source_type": source_type.value, "status": "created"}
     except Exception as e:
         raise HTTPException(400, str(e))
+
 
 
 @router.delete("/{video_id}")

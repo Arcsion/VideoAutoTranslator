@@ -13,6 +13,7 @@
 │  ┌──────────────────────────────────────────────────────────────────────────┐   │
 │  │                           CLI 入口层                                      │   │
 │  │   vat download | asr | translate | embed | upload | pipeline             │   │
+│  │   --url 支持: YouTube URL / 本地路径 / HTTP 直链（自动检测）              │   │
 │  │                              (commands.py)                                │   │
 │  └──────────────────────────────────┬───────────────────────────────────────┘   │
 │                                     ▼                                            │
@@ -29,7 +30,7 @@
 │  │                                                                           │   │
 │  │   process(steps=[...])                                                    │   │
 │  │       │                                                                   │   │
-│  │       ├──▶ _execute_step(DOWNLOAD)  ──▶ _download()                      │   │
+│  │       ├──▶ _execute_step(DOWNLOAD)  ──▶ _run_download()                  │   │
 │  │       │                                                                   │   │
 │  │       ├──▶ _execute_step(WHISPER)   ──▶ _run_whisper()                   │   │
 │  │       ├──▶ _execute_step(SPLIT)     ──▶ _run_split()                     │   │
@@ -139,7 +140,7 @@ DEFAULT_STAGE_SEQUENCE = [
 │                                                                          │
 │  DOWNLOAD                                                                │
 │      │                                                                   │
-│      └──▶ <youtube_id>.mp4          (下载的视频)                         │
+│      └──▶ original.mp4 / <yt_id>.mp4  (下载/导入的视频)                  │
 │                 │                                                        │
 │  WHISPER        ▼                                                        │
 │      │     <video>.wav              (提取的音频)                         │
@@ -191,7 +192,7 @@ DEFAULT_STAGE_SEQUENCE = [
 |------|------|
 | `process(steps, force)` | 主入口，按顺序执行指定阶段 |
 | `_execute_step(step)` | 执行单个阶段（含 DB 检查、依赖检查） |
-| `_download()` | DOWNLOAD 阶段实现 |
+| `_run_download()` | DOWNLOAD 阶段实现（多源：YouTube/LOCAL/DIRECT_URL） |
 | `_run_whisper()` | WHISPER 阶段实现 |
 | `_run_split()` | SPLIT 阶段实现 |
 | `_run_optimize(force)` | OPTIMIZE 阶段实现 |
@@ -292,7 +293,7 @@ def _execute_step(self, step: TaskStep) -> bool:
 ```python
 def _dispatch_step(self, step: TaskStep) -> bool:
     dispatch_map = {
-        TaskStep.DOWNLOAD: self._download,
+        TaskStep.DOWNLOAD: self._run_download,
         TaskStep.WHISPER: self._run_whisper,
         TaskStep.SPLIT: self._run_split,
         TaskStep.OPTIMIZE: lambda: self._run_optimize(self.force),

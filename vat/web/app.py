@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -123,6 +123,51 @@ async def serve_thumbnail(video_id: str):
             return RedirectResponse(url=thumbnail_url, status_code=302)
     
     return JSONResponse({"error": "not found"}, status_code=404)
+
+
+# ==================== 文件上传 ====================
+
+@app.post("/api/videos/upload-file")
+async def upload_video_file(file: UploadFile = File(...)):
+    """上传视频文件到服务器数据目录
+    
+    上传后保存到 {output_dir}/_uploads/{timestamp}_{filename}，
+    返回服务器路径供前端创建 LOCAL 类型视频记录。
+    """
+    config = load_config()
+    upload_dir = Path(config.storage.output_dir) / "_uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 验证文件扩展名
+    allowed_extensions = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.ts', '.m4v'}
+    suffix = Path(file.filename).suffix.lower() if file.filename else ''
+    if suffix not in allowed_extensions:
+        return JSONResponse(
+            {"error": f"不支持的文件格式: {suffix}，支持: {sorted(allowed_extensions)}"},
+            status_code=400
+        )
+    
+    # 带时间戳避免同名冲突
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = f"{timestamp}_{file.filename}"
+    target_path = upload_dir / safe_name
+    
+    # 流式写入（避免内存爆炸）
+    with open(target_path, "wb") as f:
+        while chunk := await file.read(65536):  # 64KB chunks
+            f.write(chunk)
+    
+    file_size = target_path.stat().st_size
+    if file_size == 0:
+        target_path.unlink()
+        return JSONResponse({"error": "上传的文件为空"}, status_code=400)
+    
+    return {
+        "status": "uploaded",
+        "server_path": str(target_path),
+        "filename": file.filename,
+        "size": file_size,
+    }
 
 
 # ==================== 页面路由 ====================

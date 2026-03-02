@@ -2,7 +2,7 @@
 
 > **🇨🇳 [中文文档 / Chinese Documentation](README.md)**
 
-An end-to-end video translation automation pipeline. From YouTube download to speech recognition, intelligent sentence segmentation, LLM translation, subtitle embedding, and Bilibili upload — all fully automated.
+An end-to-end video translation automation pipeline. From YouTube / local files / HTTP direct links — download or import videos, then speech recognition, intelligent sentence segmentation, LLM translation, subtitle embedding, and Bilibili upload — all fully automated.
 
 Supports both **CLI** and **Web UI**. The CLI is the core capability layer; the Web UI is an enhancement for visual management — similar to Clash vs its Dashboard: all processing capabilities are fully independent of the Web UI.
 
@@ -48,9 +48,9 @@ VAT is designed for **server-side batch video translation**, not as a single-vid
 ## Pipeline
 
 ```
-YouTube URL / Local Video
+YouTube URL / Bilibili URL / HTTP Direct Link / Local File
     │
-    ├─ 1. Download ─── Video + subtitles + metadata + scene detection + info translation
+    ├─ 1. Download ─── Download/import video + subtitles + metadata + scene detection + info translation
     ├─ 2. Whisper ──── faster-whisper ASR (chunked concurrency, vocal separation)
     ├─ 3. Split ────── LLM smart segmentation (fragments → complete sentences, timestamp alignment)
     ├─ 4. Optimize ─── LLM subtitle optimization (typo correction, term unification)
@@ -218,11 +218,19 @@ See [`config/default.yaml`](config/default.yaml) for full reference.
 ### One-Click Processing
 
 ```bash
-# Full pipeline (download → ASR → split → optimize → translate → embed)
+# Process a YouTube video (full pipeline: download → ASR → split → optimize → translate → embed)
 vat pipeline --url "https://www.youtube.com/watch?v=VIDEO_ID"
-# Or equivalently: python -m vat pipeline --url "..."
 
-# Process a playlist
+# Process a local video file
+vat pipeline --url "/path/to/video.mp4"
+
+# Process an HTTP direct link video
+vat pipeline --url "https://example.com/video.mp4"
+
+# Manually specify title (recommended for local/direct link videos)
+vat pipeline --url "/path/to/video.mp4" --title "My Video Title"
+
+# Process a YouTube playlist
 vat pipeline --playlist "https://www.youtube.com/playlist?list=PLAYLIST_ID"
 
 # Multi-GPU parallel
@@ -273,7 +281,7 @@ vat status
 
 | Command | Description |
 |---------|-------------|
-| `vat pipeline -u URL` | Full pipeline (download to embed) |
+| `vat pipeline -u URL` | Full pipeline (URL = YouTube/local path/direct link, auto-detected) |
 | `vat process -v ID -s STAGES` | Fine-grained stage control |
 | `vat download -u URL` | Download only |
 | `vat asr -v ID` | ASR only |
@@ -381,7 +389,11 @@ vat/
 │   └── prompts/          #   Prompt management (built-in + custom)
 ├── embedder/             # Subtitle embedding module
 │   └── ffmpeg_wrapper.py #   FFmpeg wrapper (soft/hard subs + GPU accel)
-├── downloaders/          # Downloaders (yt-dlp)
+├── downloaders/          # Downloaders (multi-source)
+│   ├── base.py           #   BaseDownloader / PlatformDownloader interfaces
+│   ├── youtube.py        #   YouTube downloader (yt-dlp)
+│   ├── local.py          #   Local file importer (symlink + ffprobe)
+│   └── direct_url.py     #   HTTP/HTTPS direct link downloader
 ├── uploaders/            # Uploaders (Bilibili biliup)
 ├── pipeline/             # Pipeline orchestration
 │   ├── executor.py       #   VideoProcessor (stage scheduling)
@@ -450,6 +462,7 @@ See [GPU Allocation Spec](docs/gpu_allocation_spec.md) for multi-GPU task distri
 | [WebUI Manual](docs/webui_manual.md) | Web UI operation guide |
 | [YouTube Subtitles](docs/youtube_manual_subtitles.md) | YouTube manual subtitle detection and usage |
 | [Subtitle Style Guide](docs/subtitle_style_guide.md) | ASS subtitle style template guide |
+| [Multi-Source Download Design](docs/design_multi_source_download.md) | Local file/direct link/YouTube multi-source download architecture |
 | [Known Issues](docs/known_issues.md) | Known limitations and LLM cost reference |
 
 ---

@@ -17,6 +17,7 @@ class SourceType(Enum):
     YOUTUBE = "youtube"
     LOCAL = "local"
     BILIBILI = "bilibili"
+    DIRECT_URL = "direct_url"
 
 
 class TaskStep(Enum):

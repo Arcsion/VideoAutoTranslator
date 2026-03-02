@@ -2,7 +2,7 @@
 
 > **阶段定义**：`TaskStep.DOWNLOAD` 是一个单一阶段（非阶段组）
 > 
-> 职责：从外部来源拉取视频文件，为后续 ASR/翻译/嵌入阶段准备输入
+> 职责：从外部来源（YouTube / 本地文件 / HTTP 直链）获取视频文件，为后续 ASR/翻译/嵌入阶段准备输入
 
 ---
 
@@ -14,297 +14,339 @@
 │                         (TaskStep.DOWNLOAD)                                  │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                    CLI / Pipeline 入口                               │    │
-│  │  vat download -u <url>  或  vat pipeline -u <url>                   │    │
+│  │                    CLI / Pipeline / WebUI 入口                       │    │
+│  │  vat pipeline -u <source>  (source = 路径 / YouTube URL / 直链)     │    │
 │  └───────────────────────────────┬─────────────────────────────────────┘    │
 │                                  ▼                                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │ 1. create_video_from_url()                                          │    │
-│  │    - 解析 URL，识别来源类型 (YouTube/Local/...)                      │    │
-│  │    - 生成内部 video_id = md5(url)[:16]                              │    │
-│  │    - 创建 DB 记录 (Video)                                           │    │
-│  │    - 创建输出目录 <output_dir>/<video_id>/                          │    │
+│  │ 1. detect_source_type(source) → SourceType                         │    │
+│  │ 2. create_video_from_source(source, db, source_type, title)        │    │
+│  │    - LOCAL:      video_id = content_hash(文件前1MB + size)[:16]     │    │
+│  │    - YOUTUBE:    video_id = md5(url)[:16]                           │    │
+│  │    - DIRECT_URL: video_id = md5(url)[:16]                           │    │
+│  │    - 创建 DB Video 记录 + 输出目录                                  │    │
 │  └───────────────────────────────┬─────────────────────────────────────┘    │
 │                                  ▼                                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │ 2. _download()                                                      │    │
+│  │ 3. VideoProcessor._run_download()                                   │    │
 │  │    │                                                                │    │
-│  │    ├─ 根据 source_type 选择下载器                                   │    │
-│  │    │      YouTube → YouTubeDownloader                               │    │
-│  │    │      Local   → 跳过下载                                        │    │
+│  │    ├─ 根据 source_type 选择下载器 (downloader 属性)                  │    │
+│  │    │      YOUTUBE    → YouTubeDownloader                            │    │
+│  │    │      LOCAL      → LocalImporter                                │    │
+│  │    │      DIRECT_URL → DirectURLDownloader                          │    │
 │  │    │                                                                │    │
-│  │    ├─ downloader.download(url, output_dir)                          │    │
-│  │    │      ├─ yt-dlp 下载视频                                        │    │
-│  │    │      ├─ 返回 video_path, title, metadata                       │    │
-│  │    │      └─ 保存为 <youtube_id>.<ext>                              │    │
+│  │    ├─ downloader.download(source, output_dir, **kwargs)             │    │
+│  │    │      └─ 返回标准化 result dict (video_path, title, metadata)   │    │
+│  │    │                                                                │    │
+│  │    ├─ 验证 guaranteed_fields 契约                                   │    │
 │  │    │                                                                │    │
 │  │    ├─ 更新 DB: Video.title, Video.metadata                          │    │
 │  │    │                                                                │    │
-│  │    └─ Metadata 增强 (LLM)                                           │    │
-│  │           ├─ SceneIdentifier.detect_scene() → metadata['scene']     │    │
-│  │           └─ VideoInfoTranslator.translate() → metadata['translated']│    │
+│  │    └─ Metadata 增强（按数据可用性，非按 source_type 分支）           │    │
+│  │           ├─ if subtitles: 处理字幕信息                              │    │
+│  │           ├─ if title: SceneIdentifier → metadata['scene']          │    │
+│  │           ├─ if title: VideoInfoTranslator → metadata['translated'] │    │
+│  │           └─ if thumbnail: 下载封面                                  │    │
 │  └───────────────────────────────┬─────────────────────────────────────┘    │
 │                                  ▼                                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │ 输出文件                                                            │    │
 │  │   <output_dir>/<video_id>/                                          │    │
-│  │       └─ <youtube_id>.mp4  (或其他格式)                              │    │
+│  │       ├─ original.mp4        (LOCAL: 软链接; DIRECT_URL: 下载文件)  │    │
+│  │       └─ <youtube_id>.mp4    (YouTube: yt-dlp 下载)                 │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. 阶段定义与依赖
+## 2. 下载器架构
 
-| 阶段名 | TaskStep 枚举 | 依赖 | 输出 |
-|--------|---------------|------|------|
-| **DOWNLOAD** | `TaskStep.DOWNLOAD` | 无 | 视频文件 + DB 记录 |
+### 2.1 两层接口层级
+
+```
+BaseDownloader (抽象基类)
+├── LocalImporter              # 本地文件导入（软链接 + ffprobe）
+├── DirectURLDownloader        # HTTP/HTTPS 直链下载
+└── PlatformDownloader (抽象)  # 平台下载器，增加 playlist 能力
+    └── YouTubeDownloader      # YouTube 下载（yt-dlp）
+    └── (未来) BilibiliDownloader
+```
+
+**设计动机**：`get_playlist_urls()` 仅对平台源有意义。将其放在 `PlatformDownloader` 子接口中，避免 `LocalImporter`/`DirectURLDownloader` 被迫实现不相关的方法（避免 LSP 违反）。
+
+### 2.2 BaseDownloader 接口
+
+所有下载器的通用契约，定义在 `vat/downloaders/base.py`：
+
+| 方法 | 说明 |
+|------|------|
+| `download(source, output_dir, **kwargs)` | 下载/导入视频，返回标准化结果字典 |
+| `validate_source(source)` | 验证源是否有效（路径存在 / URL 格式正确） |
+| `extract_video_id(source)` | 从源提取/生成稳定的 16 字符 hex ID |
+| `guaranteed_fields` (property) | 声明该下载器保证返回的字段集合 |
+| `probe_video_metadata(path)` (static) | 通过 ffprobe 提取视频元数据（共享工具方法） |
+
+### 2.3 PlatformDownloader 接口
+
+在 BaseDownloader 基础上增加平台特有能力，定义在 `vat/downloaders/base.py`：
+
+| 方法 | 说明 |
+|------|------|
+| `get_playlist_urls(playlist_url)` | 获取播放列表中的所有视频 URL |
+
+### 2.4 download() 返回值标准化
+
+所有下载器的 `download()` 方法返回统一结构：
 
 ```python
-# vat/models.py
-STAGE_DEPENDENCIES = {
-    TaskStep.DOWNLOAD: [],  # 无依赖，是 pipeline 起点
+{
+    'video_path': Path,               # output_dir 内的视频文件路径（必须）
+    'title': str,                     # 视频标题
+    'subtitles': Dict[str, Path],     # {lang: path}，无字幕则空 dict
+    'metadata': {
+        'duration': float,            # 时长（秒），ffprobe 提取
+        'url': str,                   # 原始 source URL / 路径
+        'video_id': str,              # 平台视频 ID（非平台源为空）
+        'description': str,           # 视频描述
+        'uploader': str,              # 上传者/频道名
+        'upload_date': str,           # 上传日期 YYYYMMDD
+        'thumbnail': str,             # 封面 URL
+        'channel_id': str,            # 频道 ID
+        'subtitle_source': str,       # 字幕来源标记
+        'available_subtitles': list,
+        'available_auto_subtitles': list,
+    }
 }
 ```
 
----
+### 2.5 guaranteed_fields 契约
 
-## 3. 模块职责与边界
+每个下载器声明保证返回的字段。executor 在 download() 后断言这些字段非空：
 
-Download 阶段负责：
-- 从外部来源（当前主要是 **YouTube**）拉取视频文件到该 `video_id` 的输出目录。
-- 为后续阶段准备 **可被 `_find_video_file()` 找到的视频文件**。
-- 在下载完成后，补全/增强数据库中的 `Video.metadata`（场景识别、视频信息翻译等）。
+| 下载器 | guaranteed_fields | 说明 |
+|--------|-------------------|------|
+| **YouTubeDownloader** | `{'title', 'duration', 'description', 'uploader', 'thumbnail'}` | 平台应提供完整元数据 |
+| **LocalImporter** | `{'duration'}` | 仅 ffprobe 可得的信息 |
+| **DirectURLDownloader** | `{'duration'}` | 仅 ffprobe 可得的信息 |
 
-明确边界：
-- Download 阶段**不做字幕相关处理**。
-- Download 阶段的“是否跳过/是否重跑”主要由 **数据库的 step 完成状态**控制。
-
----
-
-## 2. 入口与调用链（从 CLI 到核心函数）
-
-### 2.1 CLI 入口
-- `python -m vat download -u <url>`
-- `python -m vat download -p <playlist_url>`
-- `python -m vat download -f <url_list_file>`
-
-实现位置：@`vat/cli/commands.py` `download()`
-
-流程：
-- 收集 URL 列表。
-- 调用 `create_video_from_url()` 为每个 URL 建立 DB 记录，并生成 **内部 video_id**。
-- 调用 `schedule_videos(..., steps=['download'], use_multi_gpu=False)` 执行下载步骤。
-
-### 2.2 Pipeline 入口
-- `python -m vat pipeline -u <url> [--force]` 会走完整流水线，但 download 仍由同一 `_download()` 执行。
-
-### 2.3 核心执行入口
-- `VideoProcessor.process()`
-  - `_execute_step(TaskStep.DOWNLOAD)`
-    - `VideoProcessor._download()`
-
-实现位置：@`vat/pipeline/executor.py` `VideoProcessor._download`
+- 保证字段缺失 → 下载器 bug → **fail-fast**
+- 非保证字段缺失 → 正常情况 → 跳过对应后续步骤并 log
 
 ---
 
-## 3. 输入与输出
+## 3. 三个下载器实现
 
-### 3.1 输入（运行时依赖）
-- **数据库 Video 记录**：
-  - `video.source_type`：`youtube` / `local` / 其他
-  - `video.source_url`：YouTube URL 或本地路径
-- **配置**：
-  - `proxy.http_proxy`（全局代理配置）
-  - `downloader.youtube.format`
+### 3.1 YouTubeDownloader
 
-### 3.2 输出目录结构（关键概念：内部 video_id）
-- `create_video_from_url()` 会用 `md5(url)[:16]` 生成 **内部 video_id**。
-- `VideoProcessor.output_dir` 默认是：
-  - `Path(config.storage.output_dir) / <内部video_id>`
+**文件**：`vat/downloaders/youtube.py`  
+**继承**：`PlatformDownloader`
 
-注意：
-- 这个 `<内部video_id>` **不是** YouTube 的 11 位 video id。
+通过 yt-dlp 下载 YouTube 视频、字幕和元数据。
 
-### 3.3 输出文件（视频文件名的易混淆点）
-- YouTube 下载器默认 `outtmpl`：`%(id)s.%(ext)s`
-  - 即下载到输出目录内的文件名通常是：`<YouTube视频ID>.<ext>`
-- `_find_video_file()` 会优先查 `original.*`，找不到再兜底扫描输出目录内任意视频文件（排除 `final.*`）。
-  - 因此即使下载得到的是 `<youtube_id>.mp4`，后续 ASR/Embed 仍可找到。
-
----
-
-## 4. 下载器实现细节（YouTubeDownloader）
-
-实现位置：@`vat/downloaders/youtube.py` `YouTubeDownloader`
-
-### 4.1 yt-dlp 关键参数
+**yt-dlp 关键参数**：
 - **format**：来自 `downloader.youtube.format`
-- **proxy**：来自全局配置 `proxy.http_proxy`（空字符串表示不使用）
+- **proxy**：来自全局配置 `proxy.http_proxy`
 - **outtmpl**：`output_dir / '%(id)s.%(ext)s'`
-- **日志适配**：`YtDlpLogger`
-  - 会把大量 yt-dlp 的 `info` 降级为 `debug`，避免刷屏
+- **日志适配**：`YtDlpLogger` 将大量 yt-dlp info 降级为 debug
 
-### 4.2 返回结构
-`YouTubeDownloader.download()` 返回 dict（供 `_download()` 校验/落库）：
-- `video_path`: 实际下载的视频文件路径
-- `title`: 标题
-- `subtitles`: YouTube 字幕文件路径字典 `{lang: Path}`（如 `{'ja': Path('xxx.ja.vtt')}`）
-- `metadata`: 简介、时长、上传日期、uploader、url、youtube video_id、available_subtitles、available_auto_subtitles 等
+**字幕下载**：
+- 默认启用 (`download_subs=True`)
+- 默认语言：`['ja', 'ja-orig', 'en']`
+- 格式：VTT
+- 来源优先级：手动上传字幕 > YouTube 自动生成字幕
 
-### 4.3 YouTube 字幕下载
-- **默认启用**：`download_subs=True`
-- **默认语言**：`['ja', 'ja-orig', 'en']`（日语原始、日语、英语）
-- **字幕格式**：VTT
-- **文件命名**：`{youtube_id}.{lang}.vtt`
-- **存储位置**：与视频文件同目录
+### 3.2 LocalImporter
 
-字幕来源优先级：
-1. 手动上传字幕（`subtitles`）
-2. YouTube 自动生成字幕（`automatic_captions`）
+**文件**：`vat/downloaders/local.py`  
+**继承**：`BaseDownloader`
 
-字幕信息存储到 `video.metadata`：
-```python
-metadata['youtube_subtitles'] = {'ja': '/path/to/video_id.ja.vtt', ...}
-metadata['available_subtitles'] = ['live_chat']  # 手动上传
-metadata['available_auto_subtitles'] = ['ja', 'en', ...]  # 自动生成
+将本地视频文件导入 pipeline，不执行下载：
+1. 验证文件存在且格式受支持（`.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`, `.flv`, `.ts`, `.m4v`）
+2. 在 output_dir 创建**软链接** `original.{ext} → 原始路径`（零磁盘开销）
+3. 通过 ffprobe 提取 duration 等元数据
+4. 标题从文件名推导（未手动指定时）
+
+**Video ID 生成**：基于文件内容哈希（`md5(前1MB + file_size)[:16]`），同文件不同路径产生相同 ID。
+
+### 3.3 DirectURLDownloader
+
+**文件**：`vat/downloaders/direct_url.py`  
+**继承**：`BaseDownloader`
+
+从 HTTP/HTTPS 直链下载视频文件：
+1. 流式下载（chunk_size=8192，避免内存爆炸）
+2. 从 Content-Disposition 或 URL 路径推导文件扩展名
+3. 支持进度回调和代理
+4. 保存为 `original.{ext}`
+5. 通过 ffprobe 提取元数据
+
+---
+
+## 4. 入口与调用链
+
+### 4.1 CLI 入口
+
+```bash
+# 统一通过 --url 参数，内部自动检测源类型
+vat pipeline -u "https://www.youtube.com/watch?v=xxx"    # YouTube
+vat pipeline -u "/path/to/video.mp4"                      # 本地文件
+vat pipeline -u "https://example.com/video.mp4"           # 直链
+vat pipeline -u "/path/to/video.mp4" --title "我的视频"   # 手动指定标题
 ```
 
+实现位置：`vat/cli/commands.py`
+
+流程：
+1. `detect_source_type(url)` 自动识别源类型
+2. `create_video_from_source(url, db, source_type, title)` 创建 DB 记录
+3. `schedule_videos(...)` 调度执行
+
+### 4.2 WebUI 入口
+
+WebUI 通过 `POST /api/videos` 添加视频，支持四种方式：
+- **平台链接**：YouTube / Bilibili URL（自动检测）
+- **直链**：HTTP/HTTPS 视频文件直链
+- **服务器路径**：服务器上的视频文件绝对路径
+- **上传视频**：先 `POST /api/videos/upload-file` 上传文件，再创建 LOCAL 记录
+
+### 4.3 核心执行入口
+
+```
+VideoProcessor.process()
+  → _execute_step(TaskStep.DOWNLOAD)
+    → VideoProcessor._run_download()
+      → self.downloader.download(source, output_dir, **kwargs)
+```
+
+实现位置：`vat/pipeline/executor.py`
+
 ---
 
-## 5. Download 阶段的 metadata 增强（会触发 LLM）
+## 5. Video ID 生成策略
 
-`VideoProcessor._download()` 在下载成功后会尝试补充 `Video.metadata`：
+| SourceType | ID 生成方式 | 理由 |
+|---|---|---|
+| **YOUTUBE** | `md5(url)[:16]` | URL 天然稳定标识 |
+| **BILIBILI** | `md5(url)[:16]` | URL 天然稳定标识 |
+| **DIRECT_URL** | `md5(url)[:16]` | URL 是稳定标识 |
+| **LOCAL** | `md5(文件前1MB + file_size)[:16]` | 基于内容，同文件不同路径 → 同 ID |
 
-### 5.1 场景识别（SceneIdentifier）
-- 触发条件：下载器返回了 `title`。
-- 调用：@`vat/llm/scene_identifier.py` `SceneIdentifier.detect_scene()`
-- 配置：`config.downloader.scene_identify`（model/api_key/base_url，留空继承全局 `llm` 配置）
-- model fallback 链：`downloader.scene_identify.model` → `llm.model`
-- 结果写入：
-  - `metadata['scene']`
-  - `metadata['scene_name']`
-  - `metadata['scene_auto_detected']`
+注意：内部 `video_id`（16 字符 hex）**不是** YouTube 的 11 位 video id。
 
-缓存特性：
-- `SceneIdentifier` 内部使用 `call_llm()`，该函数带 `diskcache` memoize（默认 1 小时 TTL）。
-- Download 阶段没有禁用缓存；因此场景识别可能出现“秒出结果”。
+---
 
-### 5.2 视频信息翻译（VideoInfoTranslator，用于上传阶段）
-- 触发条件：`config.llm.is_available()` 为真 **且** 没有已有翻译结果。
-- 调用：@`vat/llm/video_info_translator.py` `VideoInfoTranslator.translate()`
-- 配置：`config.downloader.video_info_translate`（model/api_key/base_url，留空继承全局 `llm` 配置）
-- model fallback 链：`downloader.video_info_translate.model` → `llm.model`
+## 6. 输出目录规范
+
+所有源类型在 download 阶段完成后，output_dir 内都有可被 `_find_video_file()` 找到的视频文件：
+
+| SourceType | download 行为 | 输出文件 |
+|---|---|---|
+| **YOUTUBE** | yt-dlp 下载 | `{yt_video_id}.mp4`（yt-dlp 命名，`_find_video_file` 兼容） |
+| **LOCAL** | 创建软链接 | `original.{ext} → /原始/路径/video.mp4` |
+| **DIRECT_URL** | HTTP 下载 | `original.{ext}` |
+
+`_find_video_file()` 查找规则：优先 `original.*`，否则扫描目录内除 `final.*` 外的视频文件。
+
+---
+
+## 7. Metadata 增强（LLM，按数据可用性触发）
+
+`_run_download()` 在下载成功后按**数据是否存在**（而非 source_type）触发后续步骤：
+
+### 7.1 场景识别（SceneIdentifier）
+- **触发条件**：下载器返回了 `title`
+- 调用：`vat/llm/scene_identifier.py` `SceneIdentifier.detect_scene()`
+- 结果写入：`metadata['scene']`, `metadata['scene_name']`, `metadata['scene_auto_detected']`
+- 缓存：通过 `call_llm()` 的 `diskcache` memoize
+
+### 7.2 视频信息翻译（VideoInfoTranslator）
+- **触发条件**：`config.llm.is_available()` 为真 **且** 没有已有翻译结果
+- 调用：`vat/llm/video_info_translator.py` `VideoInfoTranslator.translate()`
 - 结果写入：`metadata['translated'] = translated_info.to_dict()`
+- 翻译复用：如果 Playlist sync 已异步翻译完成，则跳过
+- 缓存：不走 `diskcache`，每次真实发请求
 
-**翻译复用机制**：
-- Download 阶段会检查 `video.metadata.get('translated')`
-- 如果已有翻译结果（可能由 Playlist sync 阶段异步翻译完成），则跳过翻译
-- 避免重复调用 LLM
-
-缓存特性：
-- `VideoInfoTranslator` **不使用** `call_llm()` 的 memoize，而是直接 `client.chat.completions.create`。
-- 因此它默认不走 `diskcache` 缓存（会真实发请求）。
+### 7.3 封面下载
+- **触发条件**：`metadata['thumbnail']` 非空（仅 YouTube 等平台源有）
 
 ---
 
-## 6. 缓存与重复执行语义
+## 8. 缓存与重复执行语义
 
-### 6.1 步骤级（数据库控制）
-- 非 `--force`：若 DB 记录显示 `download` 已完成，则跳过。
-- `--force`：会强制重新执行 `download` 步骤。
+### 8.1 步骤级（数据库控制）
+- 非 `--force`：若 DB 记录显示 `download` 已完成，则跳过
+- `--force`：强制重新执行
 
-### 6.2 下载器级（yt-dlp 行为）
-- 即使步骤被强制重跑，yt-dlp 是否重新下载取决于其内部策略与现有文件状态。
-- 若你确实要“重新下载”，通常需要手动清理输出目录内已有视频文件（或后续给 yt-dlp 加强制覆盖参数——当前代码未做）。
-
----
-
-## 7. 常见问题与 Debug Checklist
-
-### 7.1 “下载完成但后续找不到视频文件”
-排查顺序：
-- 检查输出目录：`<output_dir>/<内部video_id>/` 是否存在视频文件。
-- 了解 `_find_video_file()` 的查找规则：优先 `original.*`，否则扫描所有视频后缀且排除 `final.*`。
-
-### 7.2 “内部 video_id 和 YouTube video_id 对不上”
-- 内部 `video_id`：`md5(url)[:16]`（用于 DB 主键与输出目录名）。
-- YouTube `video_id`：11 位（用于下载文件名与 metadata['video_id']）。
-
-### 7.3 代理/网络/地区限制
-- 检查全局代理配置 `proxy.http_proxy`。
-- 直接运行 yt-dlp 可能更容易得到完整错误信息；VAT 内部会对部分日志降级。
-
-### 7.4 YouTube 风控注意事项
-
-- **获取 playlist 视频列表**：基本无风控。
-- **逐个获取视频 info**：并发约 10 时偶尔触发验证，但 yt-dlp 最新版可自动处理，默认并发 10 即可。
-- **下载视频内容**：风控较明显，容易遇到 429/401 错误。经过测试，至少本人所用梯子，并发=2时，会在下几个视频之后迅速被限制，要求传递cookie（并非yt-dlp说的“日均1L"）。所以建议下载阶段保持并发=1，并且挂载后台。将并发处理留给后续的 ASR/翻译等阶段。
-- **失败重试**：Pipeline 层面已实现"失败放队尾"重试机制（最多 2 轮），详见 `vat/pipeline/readme.md`。
-
-### 7.5 Debug Checklist（建议按顺序）
-1. **确认 DB 记录**：该 `video_id` 是否存在、`source_url/source_type` 是否正确。
-2. **确认输出目录**：`storage.output_dir/<内部video_id>/` 是否存在。
-3. **确认下载文件**：目录内是否有 `<youtube_id>.(mp4/webm/mkv)`。
-4. **确认后续可见性**：`_find_video_file()` 会优先找 `original.*`，否则扫描目录内除 `final.*` 外的视频后缀。
-5. **确认 LLM 相关副作用**（可选）：场景识别/视频信息翻译是否触发、是否因缓存导致“秒出结果”。
+### 8.2 下载器级
+- YouTube：yt-dlp 有内部缓存策略，已有文件时可能不重新下载
+- LOCAL：软链接创建是幂等的（已存在则先删除再创建）
+- DIRECT_URL：每次都重新下载
 
 ---
 
-## 8. 关键代码索引
+## 9. 常见问题与 Debug Checklist
+
+### 9.1 "下载完成但后续找不到视频文件"
+- 检查 `<output_dir>/<video_id>/` 是否有视频文件
+- 了解 `_find_video_file()` 的查找规则：优先 `original.*`，否则扫描除 `final.*` 外的视频文件
+
+### 9.2 "内部 video_id 和 YouTube video_id 对不上"
+- 内部 ID：`md5(url)[:16]`（DB 主键、输出目录名）
+- YouTube ID：11 位（下载文件名、`metadata['video_id']`）
+
+### 9.3 LOCAL 软链接问题
+- 跨文件系统时软链接可能失败，此时 LocalImporter 会 fallback 为复制并 warn
+- 源文件被删除后软链接断裂，重新处理会报明确错误
+
+### 9.4 代理/网络
+- 检查 `proxy.http_proxy` 配置
+- YouTube 和 DIRECT_URL 共用全局代理配置
+- LOCAL 不需要网络
+
+### 9.5 YouTube 风控
+- playlist 列表获取：基本无风控
+- 视频 info 获取：并发 10 偶尔触发验证，yt-dlp 可自动处理
+- 视频下载：风控较明显，建议并发=1
+- 失败重试：Pipeline 层面有"失败放队尾"重试机制（最多 2 轮）
+
+### 9.6 Debug Checklist
+1. 确认 DB 记录：`video_id` 存在、`source_url`/`source_type` 正确
+2. 确认输出目录：`<output_dir>/<video_id>/` 存在
+3. 确认视频文件：目录内有视频文件（`original.*` 或 `<youtube_id>.*`）
+4. 确认 `_find_video_file()` 能找到文件
+5. 确认 LLM 副作用（可选）：场景识别/视频信息翻译是否触发
+
+---
+
+## 10. 关键代码索引
 
 | 组件 | 文件位置 | 函数/类 |
 |------|----------|---------|
-| CLI 入口 | `vat/cli/commands.py` | `download()` |
-| 创建 video 记录 | `vat/pipeline/executor.py` | `create_video_from_url()` |
-| 执行下载 | `vat/pipeline/executor.py` | `VideoProcessor._download()` |
+| 下载器基类 | `vat/downloaders/base.py` | `BaseDownloader`, `PlatformDownloader` |
 | YouTube 下载器 | `vat/downloaders/youtube.py` | `YouTubeDownloader` |
+| 本地文件导入器 | `vat/downloaders/local.py` | `LocalImporter` |
+| HTTP 直链下载器 | `vat/downloaders/direct_url.py` | `DirectURLDownloader` |
+| 源类型检测 | `vat/pipeline/executor.py` | `detect_source_type()` |
+| 创建视频记录 | `vat/pipeline/executor.py` | `create_video_from_source()` |
+| 执行下载 | `vat/pipeline/executor.py` | `VideoProcessor._run_download()` |
+| 查找视频文件 | `vat/pipeline/executor.py` | `_find_video_file()` |
 | 场景识别 | `vat/llm/scene_identifier.py` | `SceneIdentifier.detect_scene()` |
 | 视频信息翻译 | `vat/llm/video_info_translator.py` | `VideoInfoTranslator.translate()` |
-| 查找视频文件 | `vat/pipeline/executor.py` | `_find_video_file()` |
+| Content Hash | `vat/downloaders/local.py` | `generate_content_based_id()` |
 
 ---
 
-## 9. 修改指南：如果你想改某个功能...
+## 11. 修改指南
 
 | 如果你想... | 应该看/改哪里 |
 |-------------|---------------|
-| 添加新的下载源 | 继承 `BaseDownloader`，参考 `YouTubeDownloader` |
-| 改下载文件名格式 | `YouTubeDownloader._get_ydl_opts()` 中的 `outtmpl` |
+| 添加新的下载源 | 继承 `BaseDownloader`（通用源）或 `PlatformDownloader`（有 playlist 的平台） |
+| 改 video_id 生成规则 | `create_video_from_source()` 或各下载器的 `extract_video_id()` |
+| 改下载文件名格式 | `YouTubeDownloader._get_ydl_opts()` 的 `outtmpl` |
 | 改场景识别逻辑 | `vat/llm/scene_identifier.py` + `vat/llm/scenes.yaml` |
 | 改视频信息翻译格式 | `vat/llm/video_info_translator.py` |
-| 改 video_id 生成规则 | `create_video_from_url()` 中的 `md5(url)[:16]` |
 | 改 yt-dlp 参数 | `config.downloader.youtube.*` |
-
----
-
-## 10. 相关配置片段（config/default.yaml）
-
-```yaml
-# 全局代理配置（用于下载、HuggingFace 模型加载、LLM API 调用）
-proxy:
-  http_proxy: "http://localhost:7890"
-
-downloader:
-  youtube:
-    # 代理：引用全局配置 proxy.http_proxy
-    format: "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
-    max_workers: 1
-
-storage:
-  output_dir: "/local/gzy/4090-48/vat/data/videos"
-  database_path: "/local/gzy/4090-48/vat/data/database.db"
-
-asr:
-  split:
-    model: "gpt-4o-mini"   # 注意：场景识别默认复用这个 model
-
-translator:
-  llm:
-    model: "gpt-5-nano"    # 注意：视频信息翻译默认用这个 model
-
-llm:
-  api_key: "${VAT_LLM_APIKEY}"
-  base_url: "https://api.videocaptioner.cn"
-```
+| 改 LOCAL 软链接行为 | `LocalImporter.download()` |
+| 改直链下载行为 | `DirectURLDownloader.download()` |
+| 改 WebUI 添加视频弹窗 | `vat/web/templates/index.html` + `vat/web/routes/videos.py` |

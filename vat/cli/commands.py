@@ -14,7 +14,7 @@ from ..models import (
     Video, Task, SourceType, TaskStep, TaskStatus,
     STAGE_GROUPS, expand_stage_group, get_required_stages, DEFAULT_STAGE_SEQUENCE
 )
-from ..pipeline import create_video_from_url, VideoProcessor, schedule_videos
+from ..pipeline import create_video_from_url, create_video_from_source, detect_source_type, VideoProcessor, schedule_videos
 from ..downloaders import YouTubeDownloader
 from ..services import PlaylistService
 from ..utils.logger import setup_logger
@@ -246,14 +246,21 @@ def embed(ctx, video_id, process_all, force):
 
 
 @cli.command()
-@click.option('--url', '-u', multiple=True, help='YouTube视频URL')
+@click.option('--url', '-u', multiple=True, help='视频源（YouTube URL / 直链 / 本地路径，自动检测类型）')
 @click.option('--playlist', '-p', help='YouTube播放列表URL')
-@click.option('--file', '-f', type=click.Path(exists=True), help='URL列表文件')
+@click.option('--file', '-f', type=click.Path(exists=True), help='URL/路径列表文件（每行一个，# 开头为注释）')
+@click.option('--title', '-t', default='', help='手动指定视频标题（仅单视频时有效）')
 @click.option('--gpus', help='使用的GPU列表（逗号分隔，如: 0,1,2）')
 @click.option('--force', is_flag=True, help='强制重新处理（即使已完成）')
 @click.pass_context
-def pipeline(ctx, url, playlist, file, gpus, force):
-    """完整流水线处理（下载→转录→翻译→嵌入）"""
+def pipeline(ctx, url, playlist, file, title, gpus, force):
+    """完整流水线处理（下载→转录→翻译→嵌入）
+    
+    支持多种视频源（自动检测类型）：
+    - YouTube URL
+    - HTTP/HTTPS 视频直链
+    - 本地文件路径
+    """
     config = get_config(ctx.obj.get('config_path'))
     logger = get_logger()
     db = Database(config.storage.database_path, output_base_dir=config.storage.output_dir)
@@ -262,8 +269,8 @@ def pipeline(ctx, url, playlist, file, gpus, force):
     if gpus:
         config.concurrency.gpu_devices = [int(g.strip()) for g in gpus.split(',')]
     
-    # 收集URLs
-    urls = list(url)
+    # 收集视频源
+    sources = list(url)
     
     if playlist:
         logger.info(f"获取播放列表: {playlist}")
@@ -274,30 +281,37 @@ def pipeline(ctx, url, playlist, file, gpus, force):
             remote_components=config.downloader.youtube.remote_components,
         )
         playlist_urls = downloader.get_playlist_urls(playlist)
-        urls.extend(playlist_urls)
+        sources.extend(playlist_urls)
         logger.info(f"播放列表包含 {len(playlist_urls)} 个视频")
     
     if file:
         with open(file, 'r', encoding='utf-8') as f:
-            file_urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-            urls.extend(file_urls)
-            logger.info(f"从文件读取 {len(file_urls)} 个URL")
+            file_sources = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+            assert all(file_sources), f"--file 中包含空行，请检查文件内容"
+            sources.extend(file_sources)
+            logger.info(f"从文件读取 {len(file_sources)} 个视频源")
     
-    if not urls:
-        click.echo("错误: 请提供至少一个URL", err=True)
+    if not sources:
+        click.echo("错误: 请提供至少一个视频源（--url / --playlist / --file）", err=True)
         return
     
-    logger.info(f"共 {len(urls)} 个视频待处理")
+    # --title 仅单视频时有效
+    if title and len(sources) > 1:
+        logger.warning("--title 仅在单视频时有效，已忽略")
+        title = ''
     
-    # 创建视频记录
+    logger.info(f"共 {len(sources)} 个视频待处理")
+    
+    # 创建视频记录（自动检测源类型）
     video_ids = []
-    for url_str in urls:
+    for src in sources:
         try:
-            video_id = create_video_from_url(url_str, db, SourceType.YOUTUBE)
+            source_type = detect_source_type(src)
+            video_id = create_video_from_source(src, db, source_type, title=title)
             video_ids.append(video_id)
-            logger.info(f"已添加: {url_str} (ID: {video_id})")
+            logger.info(f"已添加: {src} (ID: {video_id}, 类型: {source_type.value})")
         except Exception as e:
-            logger.error(f"添加失败: {url_str} - {e}")
+            logger.error(f"添加失败: {src} - {e}")
     
     # 执行完整流水线
     if video_ids:
