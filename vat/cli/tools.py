@@ -751,3 +751,55 @@ def tools_season_sync(playlist):
 
     except Exception as e:
         _failed(str(e))
+
+
+# =============================================================================
+# watch: 自动监控 Playlist 并处理新视频
+# =============================================================================
+
+@tools.command('watch')
+@click.option('--playlist', '-p', multiple=True, required=True, help='Playlist ID（可多次指定）')
+@click.option('--interval', '-i', default=None, type=int, help='轮询间隔（分钟）')
+@click.option('--once', is_flag=True, help='单次模式')
+@click.option('--stages', '-s', default=None, help='处理阶段')
+@click.option('--gpu', '-g', default='auto', help='GPU 设备')
+@click.option('--concurrency', '-c', default=None, type=int, help='并发处理数')
+@click.option('--force', '-f', is_flag=True, help='强制重处理')
+@click.option('--fail-fast', is_flag=True, help='失败时停止')
+def tools_watch(playlist, interval, once, stages, gpu, concurrency, force, fail_fast):
+    """自动监控 Playlist 并处理新视频"""
+    from ..config import load_config
+    from ..database import Database
+    from ..services.watch_service import WatchService
+
+    config = load_config()
+    db = Database(config.storage.database_path, output_base_dir=config.storage.output_dir)
+
+    watch_config = config.watch
+    effective_interval = interval if interval is not None else watch_config.default_interval
+    effective_stages = stages if stages is not None else watch_config.default_stages
+    effective_concurrency = concurrency if concurrency is not None else watch_config.default_concurrency
+
+    _emit(f"启动 Watch: playlists={list(playlist)}, interval={effective_interval}min")
+    _progress(5)
+
+    try:
+        service = WatchService(
+            config=config,
+            db=db,
+            playlist_ids=list(playlist),
+            interval_minutes=effective_interval,
+            stages=effective_stages,
+            gpu_device=gpu,
+            concurrency=effective_concurrency,
+            force=force,
+            fail_fast=fail_fast,
+            once=once,
+        )
+        service.run()
+        _progress(100)
+        _success("Watch 已完成" if once else "Watch 已停止")
+    except RuntimeError as e:
+        _failed(str(e))
+    except Exception as e:
+        _failed(str(e))

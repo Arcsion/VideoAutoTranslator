@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+{% block title %}Watch - VAT Manager{% endblock %}
+
+{% block content %}
+<div x-data="watchApp()" x-init="loadSessions()">
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">👁️ Watch 模式</h1>
+        <button @click="showStartModal = true"
+                class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+            + 新建 Watch
+        </button>
+    </div>
+
+    <!-- Session 列表 -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Playlists</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">轮次</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">发现/提交</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">下次检查</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                <template x-if="sessions.length === 0">
+                    <tr>
+                        <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+                            暂无 Watch Session，点击右上角"新建 Watch"开始监控
+                        </td>
+                    </tr>
+                </template>
+                <template x-for="sess in sessions" :key="sess.session_id">
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3">
+                            <div class="text-sm font-mono text-gray-900" x-text="sess.session_id"></div>
+                            <div class="text-xs text-gray-500" x-text="'PID: ' + (sess.pid || '-')"></div>
+                        </td>
+                        <td class="px-4 py-3">
+                            <template x-for="plId in sess.playlist_ids" :key="plId">
+                                <a :href="'/playlists/' + plId" class="text-blue-600 hover:underline text-sm block" x-text="plId"></a>
+                            </template>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                                  :class="{
+                                      'bg-green-100 text-green-800': sess.status === 'running' && sess.pid_alive,
+                                      'bg-yellow-100 text-yellow-800': sess.status === 'running' && !sess.pid_alive,
+                                      'bg-gray-100 text-gray-800': sess.status === 'stopped',
+                                      'bg-red-100 text-red-800': sess.status === 'error',
+                                  }">
+                                <span x-text="sess.status === 'running' && !sess.pid_alive ? 'zombie' : sess.status"></span>
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-sm" x-text="sess.total_rounds || 0"></td>
+                        <td class="px-4 py-3 text-sm">
+                            <span x-text="(sess.total_new_found || 0) + ' / ' + (sess.total_jobs_submitted || 0)"></span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-500">
+                            <span x-text="sess.next_check_at ? new Date(sess.next_check_at).toLocaleTimeString() : '-'"></span>
+                        </td>
+                        <td class="px-4 py-3 text-sm space-x-2">
+                            <button x-show="sess.status === 'running'"
+                                    @click="stopSession(sess.session_id)"
+                                    class="text-red-600 hover:text-red-800">停止</button>
+                            <button @click="viewRounds(sess.session_id)"
+                                    class="text-blue-600 hover:text-blue-800">详情</button>
+                            <button x-show="sess.status !== 'running'"
+                                    @click="deleteSession(sess.session_id)"
+                                    class="text-gray-400 hover:text-red-600">删除</button>
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Round 详情模态框 -->
+    <div x-show="showRoundsModal" x-cloak
+         class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+         @click.self="showRoundsModal = false">
+        <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <h3 class="text-lg font-semibold">Session <span x-text="roundsSessionId" class="font-mono"></span> - 轮次记录</h3>
+                <button @click="showRoundsModal = false" class="text-gray-400 hover:text-gray-600">&times;</button>
+            </div>
+            <div class="overflow-auto flex-1 p-4">
+                <table class="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">轮次</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Playlist</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">新视频</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">任务</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">重试</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">时间</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">错误</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        <template x-for="r in rounds" :key="r.id">
+                            <tr>
+                                <td class="px-3 py-2" x-text="r.round_number"></td>
+                                <td class="px-3 py-2 font-mono text-xs" x-text="r.playlist_id"></td>
+                                <td class="px-3 py-2" x-text="r.new_videos_found"></td>
+                                <td class="px-3 py-2" x-text="r.jobs_submitted"></td>
+                                <td class="px-3 py-2" x-text="(r.retry_video_ids || []).length"></td>
+                                <td class="px-3 py-2 text-gray-500" x-text="r.started_at ? new Date(r.started_at).toLocaleString() : '-'"></td>
+                                <td class="px-3 py-2">
+                                    <span x-show="r.error" class="text-red-600 text-xs" x-text="r.error"></span>
+                                </td>
+                            </tr>
+                        </template>
+                        <template x-if="rounds.length === 0">
+                            <tr><td colspan="7" class="px-6 py-4 text-center text-gray-500">暂无轮次记录</td></tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新建 Watch 模态框 -->
+    <div x-show="showStartModal" x-cloak
+         class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+         @click.self="showStartModal = false">
+        <div class="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
+            <div class="px-6 py-4 border-b">
+                <h3 class="text-lg font-semibold">新建 Watch Session</h3>
+            </div>
+            <div class="p-6 space-y-4">
+                <!-- Playlist 选择 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">监控 Playlist</label>
+                    <div class="space-y-1 max-h-48 overflow-auto border rounded p-2">
+                        {% for pl in playlists %}
+                        <label class="flex items-center space-x-2 hover:bg-gray-50 px-2 py-1 rounded cursor-pointer">
+                            <input type="checkbox" value="{{ pl.id }}" x-model="newWatch.playlist_ids"
+                                   class="rounded border-gray-300 text-blue-600">
+                            <span class="text-sm">{{ pl.title }}</span>
+                            <span class="text-xs text-gray-400">{{ pl.id }}</span>
+                        </label>
+                        {% endfor %}
+                        {% if not playlists %}
+                        <p class="text-gray-500 text-sm py-2">暂无 Playlist，请先添加</p>
+                        {% endif %}
+                    </div>
+                </div>
+                <!-- 轮询间隔 -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">轮询间隔（分钟）</label>
+                        <input type="number" x-model.number="newWatch.interval" min="1"
+                               class="w-full border rounded px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">并发数</label>
+                        <input type="number" x-model.number="newWatch.concurrency" min="1"
+                               class="w-full border rounded px-3 py-2 text-sm">
+                    </div>
+                </div>
+                <!-- 处理阶段 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">处理阶段</label>
+                    <input type="text" x-model="newWatch.stages"
+                           class="w-full border rounded px-3 py-2 text-sm"
+                           placeholder="all">
+                </div>
+                <!-- 选项 -->
+                <div class="flex items-center space-x-4">
+                    <label class="flex items-center space-x-2 cursor-pointer">
+                        <input type="checkbox" x-model="newWatch.once" class="rounded border-gray-300 text-blue-600">
+                        <span class="text-sm">单次模式</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer">
+                        <input type="checkbox" x-model="newWatch.force" class="rounded border-gray-300 text-blue-600">
+                        <span class="text-sm">强制重处理</span>
+                    </label>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t flex justify-end space-x-3">
+                <button @click="showStartModal = false"
+                        class="px-4 py-2 text-gray-600 border rounded hover:bg-gray-50">取消</button>
+                <button @click="startWatch()"
+                        :disabled="newWatch.playlist_ids.length === 0"
+                        :class="newWatch.playlist_ids.length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'"
+                        class="px-4 py-2 bg-blue-600 text-white rounded transition">启动</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function watchApp() {
+    return {
+        sessions: [],
+        rounds: [],
+        showStartModal: false,
+        showRoundsModal: false,
+        roundsSessionId: '',
+        refreshTimer: null,
+        newWatch: {
+            playlist_ids: [],
+            interval: {{ watch_defaults.interval }},
+            stages: '{{ watch_defaults.stages }}',
+            concurrency: {{ watch_defaults.concurrency }},
+            once: false,
+            force: false,
+        },
+
+        async loadSessions() {
+            try {
+                const resp = await fetch('/api/watch/sessions');
+                const data = await resp.json();
+                this.sessions = data.sessions || [];
+            } catch (e) {
+                console.error('加载 sessions 失败:', e);
+            }
+            // 从 playlist 详情页跳转时，自动打开新建对话框并预选
+            const preselect = localStorage.getItem('watch_preselect_playlist');
+            if (preselect) {
+                localStorage.removeItem('watch_preselect_playlist');
+                this.newWatch.playlist_ids = [preselect];
+                this.showStartModal = true;
+            }
+            // 自动刷新（每 15 秒）
+            if (this.refreshTimer) clearInterval(this.refreshTimer);
+            this.refreshTimer = setInterval(() => this.loadSessions(), 15000);
+        },
+
+        async startWatch() {
+            if (this.newWatch.playlist_ids.length === 0) return;
+            try {
+                const resp = await fetch('/api/watch/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(this.newWatch),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('Watch 已启动: ' + data.job_id, 'success');
+                    this.showStartModal = false;
+                    // 重置表单
+                    this.newWatch.playlist_ids = [];
+                    // 等待一小段时间让 session 创建
+                    setTimeout(() => this.loadSessions(), 2000);
+                } else {
+                    showToast(data.error || '启动失败', 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e, 'error');
+            }
+        },
+
+        async stopSession(sessionId) {
+            if (!confirm('确认停止此 Watch Session？')) return;
+            try {
+                const resp = await fetch(`/api/watch/sessions/${sessionId}/stop`, {method: 'POST'});
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast(data.message, 'success');
+                    setTimeout(() => this.loadSessions(), 1000);
+                } else {
+                    showToast(data.error || '停止失败', 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e, 'error');
+            }
+        },
+
+        async deleteSession(sessionId) {
+            if (!confirm('确认删除此 Session 记录？')) return;
+            try {
+                const resp = await fetch(`/api/watch/sessions/${sessionId}`, {method: 'DELETE'});
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('已删除', 'success');
+                    this.loadSessions();
+                } else {
+                    showToast(data.error || '删除失败', 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e, 'error');
+            }
+        },
+
+        async viewRounds(sessionId) {
+            this.roundsSessionId = sessionId;
+            this.rounds = [];
+            this.showRoundsModal = true;
+            try {
+                const resp = await fetch(`/api/watch/sessions/${sessionId}/rounds`);
+                const data = await resp.json();
+                this.rounds = data.rounds || [];
+            } catch (e) {
+                showToast('加载轮次记录失败', 'error');
+            }
+        },
+    };
+}
+</script>
+{% endblock %}

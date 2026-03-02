@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import FastAPI, Request, Query
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +21,7 @@ from vat.web.deps import get_db
 from vat.web.jobs import JobStatus
 
 # 导入路由
-from vat.web.routes import videos_router, playlists_router, tasks_router, files_router, prompts_router, bilibili_router
+from vat.web.routes import videos_router, playlists_router, tasks_router, files_router, prompts_router, bilibili_router, watch_router
 
 app = FastAPI(title="VAT Manager", description="视频处理任务管理界面")
 
@@ -67,6 +67,7 @@ app.include_router(tasks_router)
 app.include_router(files_router)
 app.include_router(prompts_router)
 app.include_router(bilibili_router)
+app.include_router(watch_router)
 
 # 模板目录
 templates_dir = Path(__file__).parent / "templates"
@@ -101,7 +102,7 @@ templates.env.filters["format_datetime"] = format_datetime
 
 @app.get("/api/thumbnail/{video_id}")
 async def serve_thumbnail(video_id: str):
-    """返回视频本地封面文件（thumbnail.jpg 优先）"""
+    """返回视频封面：优先本地文件，回退到 metadata 中的远程 thumbnail URL（302 重定向）"""
     config = load_config()
     base_dir = Path(config.storage.output_dir) / video_id
     # 按优先级查找本地封面
@@ -111,6 +112,16 @@ async def serve_thumbnail(video_id: str):
             if p.exists() and p.stat().st_size > 0:
                 media_types = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
                 return FileResponse(p, media_type=media_types.get(ext, "image/jpeg"))
+    
+    # 本地文件不存在时，回退到 metadata 中的远程 thumbnail URL
+    # （sync 阶段会将 YouTube 缩略图 URL 存入 metadata.thumbnail）
+    db = get_db()
+    video = db.get_video(video_id)
+    if video and video.metadata:
+        thumbnail_url = video.metadata.get('thumbnail', '')
+        if thumbnail_url:
+            return RedirectResponse(url=thumbnail_url, status_code=302)
+    
     return JSONResponse({"error": "not found"}, status_code=404)
 
 
@@ -271,6 +282,9 @@ async def video_detail(request: Request, video_id: str, from_playlist: Optional[
         "upload": "上传"
     }
     
+    # 从 metadata 提取阶段模型信息（用于在时间线中展示模型名）
+    stage_models = (video.metadata or {}).get('stage_models', {})
+    
     task_timeline = []
     for step in DEFAULT_STAGE_SEQUENCE:
         # 获取该阶段最新的任务（优先已完成的）
@@ -280,6 +294,10 @@ async def video_detail(request: Request, video_id: str, from_playlist: Optional[
             completed = [t for t in step_tasks if t.status == TaskStatus.COMPLETED]
             task = completed[-1] if completed else step_tasks[-1]
         
+        # 提取该阶段使用的模型名（仅展示 model 字段）
+        stage_info = stage_models.get(step.value, {})
+        model_name = stage_info.get('model', '') if isinstance(stage_info, dict) else ''
+        
         task_timeline.append({
             "step": step.value,
             "step_name": step_names.get(step.value, step.value),
@@ -287,6 +305,7 @@ async def video_detail(request: Request, video_id: str, from_playlist: Optional[
             "started_at": task.started_at.isoformat() if task and task.started_at else None,
             "completed_at": task.completed_at.isoformat() if task and task.completed_at else None,
             "error_message": task.error_message if task else None,
+            "model": model_name,
         })
     
     # 查找正在处理该视频的活跃 job（复用与 get_job_manager 相同的路径）
@@ -724,6 +743,33 @@ async def api_stats():
 async def prompts_page(request: Request):
     """Custom Prompts 管理页"""
     return templates.TemplateResponse("prompts.html", {"request": request})
+
+
+# ==================== Watch 页面路由 ====================
+
+@app.get("/watch", response_class=HTMLResponse)
+async def watch_page(request: Request):
+    """Watch 模式管理页"""
+    db = get_db()
+    
+    # 获取所有 playlist（供启动 watch 时选择）
+    playlists = db.list_playlists()
+    playlist_list = [{"id": p.id, "title": p.title, "channel": p.channel} for p in playlists]
+    
+    # 获取 watch 默认配置
+    config = load_config()
+    watch_defaults = {
+        "interval": config.watch.default_interval,
+        "stages": config.watch.default_stages,
+        "concurrency": config.watch.default_concurrency,
+        "max_retries": config.watch.max_retries,
+    }
+    
+    return templates.TemplateResponse("watch.html", {
+        "request": request,
+        "playlists": playlist_list,
+        "watch_defaults": watch_defaults,
+    })
 
 
 # ==================== 启动自动同步 ====================

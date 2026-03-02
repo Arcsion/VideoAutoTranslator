@@ -40,6 +40,7 @@ TOOLS_TASK_TYPES = {
     'update-info',
     'sync-db',
     'season-sync',
+    'watch',
 }
 
 
@@ -413,6 +414,16 @@ class JobManager:
             'season-sync': {
                 'playlist_id': '--playlist',
             },
+            'watch': {
+                'playlist_ids': '--playlist',  # 特殊处理：多值参数
+                'interval': '--interval',
+                'once': '--once',
+                'stages': '--stages',
+                'gpu': '--gpu',
+                'concurrency': '--concurrency',
+                'force': '--force',
+                'fail_fast': '--fail-fast',
+            },
         }
         
         mapping = PARAM_MAP.get(task_type, {})
@@ -423,6 +434,10 @@ class JobManager:
             if isinstance(value, bool):
                 if value:
                     cmd.append(flag)
+            elif isinstance(value, list):
+                # 多值参数：每个值分别传递（如 --playlist A --playlist B）
+                for item in value:
+                    cmd.extend([flag, str(item)])
             else:
                 cmd.extend([flag, str(value)])
         

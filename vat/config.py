@@ -536,6 +536,16 @@ class WebConfig:
 
 
 @dataclass
+class WatchConfig:
+    """Watch 模式配置"""
+    default_interval: int = 60         # 默认轮询间隔（分钟）
+    default_stages: str = "all"        # 默认处理阶段
+    max_new_videos_per_round: int = 0  # 每轮最多提交的新视频数（0=不限制）
+    default_concurrency: int = 1       # 提交任务时的默认并发数
+    max_retries: int = 3               # 同一视频最大重试次数
+
+
+@dataclass
 class Config:
     """主配置类"""
     storage: StorageConfig
@@ -550,6 +560,7 @@ class Config:
     llm: LLMConfig  # 统一的LLM配置（在配置加载时自动设置环境变量）
     proxy: ProxyConfig  # 全局代理配置
     web: WebConfig  # Web UI 配置
+    watch: WatchConfig  # Watch 模式配置
     
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'Config':
@@ -725,6 +736,16 @@ class Config:
             port=web_data.get('port', 8080),
         )
         
+        # Watch 模式配置（可选，有默认值）
+        watch_data = data.get('watch', {})
+        watch = WatchConfig(
+            default_interval=watch_data.get('default_interval', 60),
+            default_stages=watch_data.get('default_stages', 'all'),
+            max_new_videos_per_round=watch_data.get('max_new_videos_per_round', 0),
+            default_concurrency=watch_data.get('default_concurrency', 1),
+            max_retries=watch_data.get('max_retries', 3),
+        )
+        
         return cls(
             storage=storage,
             downloader=downloader,
@@ -738,6 +759,7 @@ class Config:
             llm=llm,
             proxy=proxy,
             web=web,
+            watch=watch,
         )
     
     def to_dict(self) -> Dict[str, Any]:

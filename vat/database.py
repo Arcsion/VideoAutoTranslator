@@ -30,7 +30,7 @@ from .utils.logger import setup_logger
 logger = setup_logger("database")
 
 # 当前数据库版本
-DB_VERSION = 5
+DB_VERSION = 7
 
 # SQLite 并发配置
 # 高并发场景（20+ 线程 + WebUI 进程）需要足够长的超时
@@ -306,6 +306,125 @@ class Database:
             affected = cursor.fetchone()['cnt']
             cursor.execute("UPDATE videos SET output_dir = NULL")
             logger.info(f"数据库迁移 v4 -> v5 完成: 清空 {affected} 条 output_dir 记录")
+        
+        if from_version < 6:
+            # 迁移 v5 -> v6: 回填现有视频的 stage_models
+            # 为已完成相关阶段但缺少 stage_models 的视频补充历史配置信息。
+            # 这些是迁移前所有视频使用的已知默认配置。
+            logger.info("执行数据库迁移 v5 -> v6: 回填 stage_models")
+            
+            # 历史默认配置（迁移前所有视频使用的配置）
+            legacy_stage_models = {
+                'whisper': {
+                    'model': 'large-v3',
+                    'backend': 'faster-whisper',
+                    'language': 'ja',
+                    'device': 'cuda',
+                    'compute_type': 'float32',
+                    'vad_filter': False,
+                    'beam_size': 7,
+                },
+                'split': {
+                    'model': 'gpt-4o-mini',
+                    'mode': 'sentence',
+                    'max_words_cjk': 40,
+                    'enable_chunking': True,
+                    'custom_prompt': '',
+                },
+                'optimize': {
+                    'model': 'gemini-3-flash-preview',
+                    'batch_size': 100,
+                    'thread_num': 10,
+                    'custom_prompt': 'fubuki',
+                },
+                'translate': {
+                    'model': 'gemini-3-flash-preview',
+                    'enable_reflect': True,
+                    'batch_size': 100,
+                    'thread_num': 10,
+                    'custom_prompt': 'fubuki',
+                    'enable_context': True,
+                },
+            }
+            
+            # 查找所有视频，检查哪些需要回填
+            cursor.execute("SELECT id, metadata FROM videos")
+            backfill_count = 0
+            for row in cursor.fetchall():
+                video_id = row['id']
+                metadata_str = row['metadata']
+                metadata = json.loads(metadata_str) if metadata_str else {}
+                
+                # 跳过已有 stage_models 的视频
+                if metadata.get('stage_models'):
+                    continue
+                
+                # 检查该视频哪些阶段已完成，只回填已完成阶段的配置
+                stage_models = {}
+                for stage_name in ['whisper', 'split', 'optimize', 'translate']:
+                    cursor.execute("""
+                        SELECT status FROM tasks
+                        WHERE video_id = ? AND step = ?
+                        ORDER BY id DESC LIMIT 1
+                    """, (video_id, stage_name))
+                    task_row = cursor.fetchone()
+                    if task_row and task_row['status'] == 'completed':
+                        stage_models[stage_name] = legacy_stage_models[stage_name]
+                
+                if stage_models:
+                    metadata['stage_models'] = stage_models
+                    cursor.execute(
+                        "UPDATE videos SET metadata = ? WHERE id = ?",
+                        (json.dumps(metadata, ensure_ascii=False), video_id)
+                    )
+                    backfill_count += 1
+            
+            logger.info(f"数据库迁移 v5 -> v6 完成: 回填 {backfill_count} 个视频的 stage_models")
+        
+        if from_version < 7:
+            # 迁移 v6 -> v7: 添加 watch_sessions 和 watch_rounds 表
+            logger.info("执行数据库迁移 v6 -> v7: 添加 Watch 模式状态表")
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS watch_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    playlist_ids TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'running',
+                    pid INTEGER,
+                    config TEXT,
+                    started_at TIMESTAMP NOT NULL,
+                    last_check_at TIMESTAMP,
+                    next_check_at TIMESTAMP,
+                    total_rounds INTEGER DEFAULT 0,
+                    total_new_found INTEGER DEFAULT 0,
+                    total_jobs_submitted INTEGER DEFAULT 0,
+                    error TEXT,
+                    stopped_at TIMESTAMP
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS watch_rounds (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    playlist_id TEXT NOT NULL,
+                    started_at TIMESTAMP NOT NULL,
+                    finished_at TIMESTAMP,
+                    new_videos_found INTEGER DEFAULT 0,
+                    jobs_submitted INTEGER DEFAULT 0,
+                    submitted_video_ids TEXT,
+                    submitted_job_ids TEXT,
+                    retry_video_ids TEXT,
+                    error TEXT,
+                    FOREIGN KEY (session_id) REFERENCES watch_sessions(session_id)
+                )
+            """)
+            
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_wr_session ON watch_rounds(session_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ws_status ON watch_sessions(status)")
+            
+            logger.info("数据库迁移 v6 -> v7 完成")
     
     def add_video(self, video: Video) -> None:
         """添加视频记录

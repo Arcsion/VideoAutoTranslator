@@ -64,7 +64,7 @@ asr:
   device: "cuda"                            # 设备：cuda/cpu
   compute_type: "float32"                   # 计算精度：float16/float32/int8
   vad_filter: false                          # 语音活动检测
-  beam_size: 7                              # beam搜索大小
+  beam_size: 5                              # beam搜索大小
   models_subdir: "whisper"                  # 【模型路径】子目录名称，完整路径: storage.models_dir/whisper/
                                             # 模型会自动下载到此目录
   
@@ -179,14 +179,16 @@ translator:
     enable_context: true                    # 是否启用前文上下文（新增）
     
     # Optimize 配置（嵌套）- 字幕优化
+    # 使用火山引擎 Coding Plan，kimi-k2.5 在同语言 optimize 阶段有良好的 ASR 纠错能力
+    # 测试验证：能修正人名(キュウリさん→フブキさん)、自我介绍(ちらかみむむき→白上フブキ)等
     optimize:
       enable: true                          # 是否启用字幕优化（修正错别字、统一术语）
-      custom_prompt: "fubuki"                     # 优化自定义提示词文件名（相对于 vat/llm/prompts/custom/），如 "optimize/example.md"，空字符串表示不使用
-      model: "gemini-3-flash-preview"  #"gpt-5-nano"                     # 优化模型（比翻译便宜，术语纠错靠 prompt 引导）
-      # api_key: "${VAT_RESELLER_APIKEY}"       # 中转站 API Key
-      # base_url: "https://api.videocaptioner.cn" # 中转站 Base URL
-      # batch_size: 0                         # 可选覆写批大小（0=继承父级 translator.llm.batch_size）
-      # thread_num: 0                         # 可选覆写线程数（0=继承父级 translator.llm.thread_num）
+      custom_prompt: "fubuki"                     # 优化自定义提示词文件名
+      model: "kimi-k2.5"                          # 优化模型（火山引擎 Coding Plan）
+      api_key: "${VAT_VOLC_APIKEY}"               # 火山引擎 API Key
+      base_url: "https://ark.cn-beijing.volces.com/api/coding/v3"  # 火山引擎 Coding Plan Base URL（必须用 /api/coding/v3）
+      batch_size: 100                        # 覆写批大小（大 BS 减少 API 调用次数）
+      thread_num: 3                          # 覆写线程数（火山引擎建议低并发）
   
   
   # 本地模型配置
@@ -288,7 +290,7 @@ proxy:
   downloader: "http://localhost:7790"                          # 下载器（YouTube 访问）
   # llm: ""                                 # 所有 LLM API 调用的默认代理
   translate: "http://localhost:7990"                           # 翻译 LLM（如 Google API 需特定地区代理）
-  # optimize: ""                            # 优化 LLM（fallback: translate → llm → http_proxy）
+  optimize: ""                              # 优化 LLM（火山引擎国内服务，不需要代理）
   # split: ""                               # 断句 LLM
   # scene_identify: ""                      # 场景识别 LLM
   video_info_translate: "http://localhost:7990"                # 视频信息翻译 LLM
@@ -299,3 +301,13 @@ proxy:
 web:
   host: "0.0.0.0"                            # 监听地址（0.0.0.0 表示所有网卡）
   port: 13579                                 # 监听端口
+
+# =============================================================================
+# Watch 模式配置（自动监控 Playlist 并处理新视频）
+# =============================================================================
+watch:
+  default_interval: 60                        # 默认轮询间隔（分钟）
+  default_stages: "all"                       # 默认处理阶段（all = 全流程含上传）
+  max_new_videos_per_round: 0                 # 每轮最多提交的新视频数（0=不限制）
+  default_concurrency: 1                      # 提交任务时的默认并发数
+  max_retries: 3                              # 同一视频最大重试次数（跨轮次累计）

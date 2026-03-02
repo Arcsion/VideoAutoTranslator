@@ -54,6 +54,10 @@
                 <button onclick="showRangeDialog()" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
                     范围处理
                 </button>
+                <a href="/watch" onclick="localStorage.setItem('watch_preselect_playlist', '{{ playlist.id }}')"
+                   class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 inline-flex items-center">
+                    👁️ Watch
+                </a>
                 <button onclick="deletePlaylist()" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">
                     删除
                 </button>

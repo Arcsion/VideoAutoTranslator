@@ -28,6 +28,7 @@ from ..utils.cache import disable_cache, enable_cache
 from ..utils.logger import setup_logger, set_video_id
 from .exceptions import PipelineError, ASRError, TranslateError, EmbedError, DownloadError, UploadError
 from .progress import ProgressTracker, ProgressEvent
+from ..utils.resource_lock import resource_lock
 
 class VideoProcessor:
     """单个视频的完整处理流程"""
@@ -475,6 +476,15 @@ class VideoProcessor:
         video = self.db.get_video(self.video_id)
         return bool((video.metadata or {}).get('no_speech', False))
     
+    def _is_shorts_video(self) -> bool:
+        """检查视频是否属于 Shorts playlist（竖屏短视频）
+        
+        竖屏视频屏幕宽度窄，字幕断句需要更短的分段以避免换行过多。
+        检测依据：视频所属 playlist ID 以 '-shorts' 结尾。
+        """
+        playlists = self.db.get_video_playlists(self.video_id)
+        return any(pid.endswith('-shorts') for pid in playlists)
+    
     def _execute_step(self, step: TaskStep) -> bool:
         """
         执行单个步骤（细粒度阶段）
@@ -519,12 +529,21 @@ class VideoProcessor:
             sub_langs = yt_config.subtitle_languages
             
             try:
-                result = self.downloader.download(
-                    self.video.source_url,
-                    self.output_dir,
-                    download_subs=download_subs,
-                    sub_langs=sub_langs
-                )
+                # 获取跨进程下载锁（同一时间只允许一个进程下载，防止 YouTube 限流）
+                download_cooldown = self.config.downloader.youtube.download_delay
+                with resource_lock(
+                    db_path=str(self.db.db_path),
+                    resource_type='youtube_download',
+                    cooldown_seconds=download_cooldown,
+                    timeout_seconds=600,
+                    lock_ttl_seconds=1800,
+                ):
+                    result = self.downloader.download(
+                        self.video.source_url,
+                        self.output_dir,
+                        download_subs=download_subs,
+                        sub_langs=sub_langs
+                    )
                 
                 if 'video_path' not in result:
                     raise DownloadError("下载器未返回视频路径")
@@ -957,6 +976,8 @@ class VideoProcessor:
                 metadata.update_substep('whisper', whisper_config, "original_raw.srt")
             
             metadata.save(self.output_dir)
+            # 记录 whisper 阶段使用的模型配置
+            self._save_stage_model_info('whisper', self._collect_whisper_stage_info())
             self._progress_with_tracker(f"Whisper 完成，共 {len(asr_data)} 个片段")
             return True
             
@@ -1090,6 +1111,23 @@ class VideoProcessor:
                         except Exception as e:
                             self.logger.warning(f"加载断句场景提示词失败: {e}")
                     
+                    # 计算 effective split 参数（竖屏短视频缩放 0.5）
+                    split_scale = 0.5 if self._is_shorts_video() else 1.0
+                    split_params = {
+                        'max_words_cjk': max(1, int(self.config.asr.split.max_words_cjk * split_scale)),
+                        'max_words_english': max(1, int(self.config.asr.split.max_words_english * split_scale)),
+                        'min_words_cjk': max(1, int(self.config.asr.split.min_words_cjk * split_scale)),
+                        'min_words_english': max(1, int(self.config.asr.split.min_words_english * split_scale)),
+                        'recommend_words_cjk': max(1, int(self.config.asr.split.recommend_words_cjk * split_scale)),
+                        'recommend_words_english': max(1, int(self.config.asr.split.recommend_words_english * split_scale)),
+                    }
+                    if split_scale != 1.0:
+                        self.progress_callback(
+                            f"竖屏短视频：断句字数缩放 {split_scale}x "
+                            f"(推荐CJK {split_params['recommend_words_cjk']}, "
+                            f"上限CJK {split_params['max_words_cjk']})"
+                        )
+                    
                     # 执行断句
                     if (self.config.asr.split.enable_chunking and 
                         len(asr_data.segments) >= self.config.asr.split.chunk_min_threshold):
@@ -1101,12 +1139,12 @@ class VideoProcessor:
                             chunk_size_sentences=self.config.asr.split.chunk_size_sentences,
                             chunk_overlap_sentences=self.config.asr.split.chunk_overlap_sentences,
                             model=split_creds["model"],
-                            max_word_count_cjk=self.config.asr.split.max_words_cjk,
-                            max_word_count_english=self.config.asr.split.max_words_english,
-                            min_word_count_cjk=self.config.asr.split.min_words_cjk,
-                            min_word_count_english=self.config.asr.split.min_words_english,
-                            recommend_word_count_cjk=self.config.asr.split.recommend_words_cjk,
-                            recommend_word_count_english=self.config.asr.split.recommend_words_english,
+                            max_word_count_cjk=split_params['max_words_cjk'],
+                            max_word_count_english=split_params['max_words_english'],
+                            min_word_count_cjk=split_params['min_words_cjk'],
+                            min_word_count_english=split_params['min_words_english'],
+                            recommend_word_count_cjk=split_params['recommend_words_cjk'],
+                            recommend_word_count_english=split_params['recommend_words_english'],
                             scene_prompt=split_scene_prompt,
                             mode=self.config.asr.split.mode,
                             allow_model_upgrade=self.config.asr.split.allow_model_upgrade,
@@ -1118,7 +1156,7 @@ class VideoProcessor:
                     else:
                         if len(asr_data.segments) < self.config.asr.split.chunk_min_threshold:
                             self.progress_callback("片段数较少，使用全文断句")
-                        asr_data = self._split_with_speaker_awareness(asr_data, split_scene_prompt)
+                        asr_data = self._split_with_speaker_awareness(asr_data, split_scene_prompt, split_params)
                     
                     asr_data.dedup_adjacent_segments()
                     asr_data.optimize_timing()
@@ -1131,6 +1169,9 @@ class VideoProcessor:
             original_json = self.output_dir / "original.json"
             self.asr.save_results_as_json(asr_data, original_json)
             metadata.save(self.output_dir)
+            
+            # 记录 split 阶段使用的模型配置
+            self._save_stage_model_info('split', self._collect_split_stage_info())
             
             if self.force:
                 enable_cache()
@@ -1282,6 +1323,8 @@ class VideoProcessor:
                 self.db.add_processing_note(self.video_id, "optimize", warn_msg)
             
             optimized_data.save(str(optimized_srt))
+            # 记录 optimize 阶段使用的模型配置
+            self._save_stage_model_info('optimize', self._collect_optimize_stage_info())
             self.progress_callback(f"字幕优化完成，共 {len(optimized_data)} 条")
             
             if self.force:
@@ -1374,6 +1417,8 @@ class VideoProcessor:
             translated_ass = self.output_dir / "translated.ass"
             translated_data.save(str(translated_ass), ass_style=style_str)
             
+            # 记录 translate 阶段使用的模型配置
+            self._save_stage_model_info('translate', self._collect_translate_stage_info())
             self.progress_callback(f"翻译完成，共 {len(translated_data)} 条")
             
             if self.force:
@@ -1496,38 +1541,55 @@ class VideoProcessor:
         
         return ASRData(new_segments)
 
-    def _split_with_speaker_awareness(self, asr_data: ASRData, scene_prompt: str = "") -> ASRData:
+    def _split_with_speaker_awareness(
+        self, asr_data: ASRData, scene_prompt: str = "",
+        split_params: Optional[Dict[str, int]] = None
+    ) -> ASRData:
         """按说话人分组进行智能断句
         
         Args:
             asr_data: ASR 数据
             scene_prompt: 场景特定提示词（可选）
+            split_params: 断句字数参数（可选，已经经过 shorts 缩放等调整）。
+                为 None 时直接使用 config 原始值。
         """
         # 检查是否有说话人信息
         has_speakers = any(seg.speaker_id is not None for seg in asr_data.segments)
         
         split_creds = self.config.get_stage_llm_credentials("split")
         
+        # 使用传入的 effective params，或回退到 config 原始值
+        p = split_params or {
+            'max_words_cjk': self.config.asr.split.max_words_cjk,
+            'max_words_english': self.config.asr.split.max_words_english,
+            'min_words_cjk': self.config.asr.split.min_words_cjk,
+            'min_words_english': self.config.asr.split.min_words_english,
+            'recommend_words_cjk': self.config.asr.split.recommend_words_cjk,
+            'recommend_words_english': self.config.asr.split.recommend_words_english,
+        }
+        
+        # 公共 LLM 调用参数
+        llm_kwargs = dict(
+            model=split_creds["model"],
+            max_word_count_cjk=p['max_words_cjk'],
+            max_word_count_english=p['max_words_english'],
+            min_word_count_cjk=p['min_words_cjk'],
+            min_word_count_english=p['min_words_english'],
+            recommend_word_count_cjk=p['recommend_words_cjk'],
+            recommend_word_count_english=p['recommend_words_english'],
+            scene_prompt=scene_prompt,
+            mode=self.config.asr.split.mode,
+            allow_model_upgrade=self.config.asr.split.allow_model_upgrade,
+            model_upgrade_chain=self.config.asr.split.model_upgrade_chain,
+            api_key=split_creds["api_key"],
+            base_url=split_creds["base_url"],
+            proxy=self.config.get_stage_proxy("split") or "",
+        )
+        
         if not has_speakers:
             # 无说话人信息，使用原有逻辑
             full_text = "".join(seg.text for seg in asr_data.segments)
-            split_texts = split_by_llm(
-                full_text,
-                model=split_creds["model"],
-                max_word_count_cjk=self.config.asr.split.max_words_cjk,
-                max_word_count_english=self.config.asr.split.max_words_english,
-                min_word_count_cjk=self.config.asr.split.min_words_cjk,
-                min_word_count_english=self.config.asr.split.min_words_english,
-                recommend_word_count_cjk=self.config.asr.split.recommend_words_cjk,
-                recommend_word_count_english=self.config.asr.split.recommend_words_english,
-                scene_prompt=scene_prompt,
-                mode=self.config.asr.split.mode,
-                allow_model_upgrade=self.config.asr.split.allow_model_upgrade,
-                model_upgrade_chain=self.config.asr.split.model_upgrade_chain,
-                api_key=split_creds["api_key"],
-                base_url=split_creds["base_url"],
-                proxy=self.config.get_stage_proxy("split") or "",
-            )
+            split_texts = split_by_llm(full_text, **llm_kwargs)
             return self._realign_timestamps(asr_data, split_texts)
         
         # 有说话人信息，按说话人分组处理
@@ -1539,23 +1601,7 @@ class VideoProcessor:
             speaker_text = "".join(seg.text for seg in segments)
             
             # 对该说话人独立断句
-            split_texts = split_by_llm(
-                speaker_text,
-                model=split_creds["model"],
-                max_word_count_cjk=self.config.asr.split.max_words_cjk,
-                max_word_count_english=self.config.asr.split.max_words_english,
-                min_word_count_cjk=self.config.asr.split.min_words_cjk,
-                min_word_count_english=self.config.asr.split.min_words_english,
-                recommend_word_count_cjk=self.config.asr.split.recommend_words_cjk,
-                recommend_word_count_english=self.config.asr.split.recommend_words_english,
-                scene_prompt=scene_prompt,
-                mode=self.config.asr.split.mode,
-                allow_model_upgrade=self.config.asr.split.allow_model_upgrade,
-                model_upgrade_chain=self.config.asr.split.model_upgrade_chain,
-                api_key=split_creds["api_key"],
-                base_url=split_creds["base_url"],
-                proxy=self.config.get_stage_proxy("split") or "",
-            )
+            split_texts = split_by_llm(speaker_text, **llm_kwargs)
             
             # 为该说话人的片段重新分配时间戳
             speaker_asr = ASRData(segments)
@@ -1904,17 +1950,26 @@ class VideoProcessor:
                 threads=self.config.uploader.bilibili.threads
             )
             
-            result = uploader.upload(
-                video_path=final_video,
-                title=title[:80],  # B站标题限制80字符
-                description=description[:2000],  # B站简介限制2000字符
-                tid=tid,
-                tags=tags,
-                copyright=copyright_type,
-                source=source_url,
-                cover_path=cover_path,
-                dtime=self._upload_dtime,
-            )
+            # 获取跨进程上传锁（同一时间只允许一个进程上传，防止 B站风控）
+            upload_cooldown = self.config.uploader.bilibili.upload_interval
+            with resource_lock(
+                db_path=str(self.db.db_path),
+                resource_type='bilibili_upload',
+                cooldown_seconds=upload_cooldown,
+                timeout_seconds=1200,
+                lock_ttl_seconds=3600,
+            ):
+                result = uploader.upload(
+                    video_path=final_video,
+                    title=title[:80],  # B站标题限制80字符
+                    description=description[:2000],  # B站简介限制2000字符
+                    tid=tid,
+                    tags=tags,
+                    copyright=copyright_type,
+                    source=source_url,
+                    cover_path=cover_path,
+                    dtime=self._upload_dtime,
+                )
             
             # 清理临时封面文件
             if temp_cover_file:
@@ -2006,6 +2061,77 @@ class VideoProcessor:
         
         return True
     
+    def _save_stage_model_info(self, stage: str, model_info: Dict[str, Any]) -> None:
+        """将阶段的模型/配置信息写入 metadata['stage_models']
+        
+        每个阶段完成后调用，记录实际使用的模型和关键配置。
+        底层存储详细信息，上层展示时只取 'model' 字段。
+        
+        Args:
+            stage: 阶段名 ('whisper', 'split', 'optimize', 'translate')
+            model_info: 该阶段的配置字典，必须包含 'model' 键
+        """
+        assert 'model' in model_info, f"model_info 必须包含 'model' 键: {model_info}"
+        
+        video = self.db.get_video(self.video_id)
+        if not video:
+            self.logger.warning(f"_save_stage_model_info: 视频 {self.video_id} 不存在")
+            return
+        
+        metadata = video.metadata or {}
+        stage_models = metadata.get('stage_models', {})
+        stage_models[stage] = model_info
+        metadata['stage_models'] = stage_models
+        self.db.update_video(self.video_id, metadata=metadata)
+    
+    def _collect_whisper_stage_info(self) -> Dict[str, Any]:
+        """收集 whisper 阶段的详细配置信息"""
+        asr_cfg = self.config.asr
+        return {
+            'model': asr_cfg.model,
+            'backend': asr_cfg.backend,
+            'language': asr_cfg.language,
+            'device': asr_cfg.device,
+            'compute_type': asr_cfg.compute_type,
+            'vad_filter': asr_cfg.vad_filter,
+            'beam_size': asr_cfg.beam_size,
+        }
+    
+    def _collect_split_stage_info(self) -> Dict[str, Any]:
+        """收集 split 阶段的详细配置信息"""
+        split_cfg = self.config.asr.split
+        creds = self.config.get_stage_llm_credentials("split")
+        return {
+            'model': creds['model'],
+            'mode': split_cfg.mode,
+            'max_words_cjk': split_cfg.max_words_cjk,
+            'enable_chunking': split_cfg.enable_chunking,
+        }
+    
+    def _collect_optimize_stage_info(self) -> Dict[str, Any]:
+        """收集 optimize 阶段的详细配置信息"""
+        opt_config = self.config.get_optimize_effective_config()
+        opt_cfg = self.config.translator.llm.optimize
+        return {
+            'model': opt_config['model'],
+            'batch_size': opt_config['batch_size'],
+            'thread_num': opt_config['thread_num'],
+            'custom_prompt': opt_cfg.custom_prompt or '',
+        }
+    
+    def _collect_translate_stage_info(self) -> Dict[str, Any]:
+        """收集 translate 阶段的详细配置信息"""
+        creds = self.config.get_stage_llm_credentials("translate")
+        llm_cfg = self.config.translator.llm
+        return {
+            'model': creds['model'],
+            'enable_reflect': llm_cfg.enable_reflect,
+            'batch_size': llm_cfg.batch_size,
+            'thread_num': llm_cfg.thread_num,
+            'custom_prompt': llm_cfg.custom_prompt or '',
+            'enable_context': llm_cfg.enable_context,
+        }
+
     def _extract_whisper_config(self) -> Dict[str, Any]:
         """提取 Whisper 关键配置"""
         from vat.utils.cache_metadata import extract_key_config, WHISPER_KEY_CONFIGS

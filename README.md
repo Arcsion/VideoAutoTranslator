@@ -59,6 +59,8 @@ VAT 的设计目标是**服务器端批量视频翻译**，而非面向单个视
 - **阶段级追踪**：每个视频的每个处理阶段独立记录状态，支持断点续传和选择性重跑
 - **并发调度**：多 GPU 任务调度、多视频并行处理
 - **状态可恢复**：进程崩溃后自动检测孤儿任务，重启即可继续
+- **Watch 模式**：自动监控 YouTube Playlist，发现新视频后自动提交全流程处理任务（详见 [Watch Mode 文档](docs/WATCH_MODE_SPEC.md)）
+- **跨进程资源锁**：多个 VAT 进程并发运行时，自动协调 YouTube 下载和 B站上传的速率，防止限流/风控
 
 ---
 
@@ -322,6 +324,9 @@ vat status
 | `vat tools update-info --playlist ID` | 批量更新已上传视频的标题和简介 |
 | `vat tools sync-db --season S --playlist ID` | 从B站合集同步信息回数据库 |
 | `vat tools season-sync --playlist ID` | 合集同步（添加+排序） |
+| `vat watch -p PLAYLIST_ID` | 自动监控 Playlist 并处理新视频（持续运行） |
+| `vat watch -p PL1 -p PL2 -i 30` | 同时监控多个 Playlist，30 分钟间隔 |
+| `vat watch -p PLAYLIST_ID --once` | 单次检查后退出（可搭配系统 cron） |
 
 > `vat tools` 子命令与原有 CLI 命令功能相同，区别在于输出标准化进度标记（`[N%]`/`[SUCCESS]`/`[FAILED]`），可被 WebUI 的 JobManager 作为子进程调度和监控。
 
@@ -400,33 +405,36 @@ vat web --port 8080
 
 ```
 vat/
-├── asr/                  # 语音识别模块
-│   ├── whisper_asr.py    #   faster-whisper 封装
+├── asr/                  # 语音识别模块（Whisper + LLM 断句）
+│   ├── whisper_wrapper.py #  faster-whisper 封装
 │   ├── chunked_asr.py    #   分块并发 ASR
 │   ├── split.py          #   LLM 智能断句
-│   ├── asr_post.py       #   后处理（幻觉/重复检测）
+│   ├── postprocessing.py #   后处理（幻觉/重复检测）
 │   └── vocal_separation/ #   人声分离
 ├── translator/           # 翻译模块
 │   └── llm_translator.py #   LLM 反思翻译引擎
 ├── llm/                  # LLM 基础设施
-│   ├── client.py         #   统一 LLM 调用客户端
+│   ├── client.py         #   统一 LLM 调用客户端（多端点、缓存、重试）
 │   ├── scene_identifier.py # 场景识别
-│   └── prompts/          #   提示词管理（内置 + 自定义）
+│   ├── video_info_translator.py # 视频信息翻译（标题/简介/标签 + B站分区推荐）
+│   └── prompts/          #   提示词管理（Markdown 文件 + 模板变量）
 ├── embedder/             # 字幕嵌入模块
 │   └── ffmpeg_wrapper.py #   FFmpeg 封装（软/硬字幕 + GPU 加速）
 ├── downloaders/          # 下载器（yt-dlp）
-├── uploaders/            # 上传器（B 站 biliup）
+├── uploaders/            # 上传器（B 站 biliup + 模板渲染 + 合集管理）
 ├── pipeline/             # 流水线编排
 │   ├── executor.py       #   VideoProcessor（阶段调度）
 │   ├── scheduler.py      #   多 GPU 调度器
 │   └── progress.py       #   进度追踪
-├── web/                  # Web 管理界面
-│   ├── app.py            #   FastAPI 应用 + 页面路由
-│   ├── jobs.py           #   任务管理器（子进程调度）
-│   ├── routes/           #   API 路由
+├── web/                  # Web 管理界面（FastAPI + Jinja2）
+│   ├── app.py            #   应用入口 + 页面路由
+│   ├── jobs.py           #   任务管理器（子进程调度 + SQLite 持久化）
+│   ├── routes/           #   API 路由（视频/Playlist/任务/B站/提示词）
 │   └── templates/        #   Jinja2 + TailwindCSS 页面模板
 ├── cli/                  # CLI 命令（click）
-├── services/             # 业务逻辑层（Playlist 服务等）
+├── services/             # 业务逻辑层（Playlist 同步/排序/元信息管理）
+├── subtitle_utils/       # 字幕工具（文本对齐、格式定义）
+├── utils/                # 通用工具（GPU 管理、日志、缓存、输出验证）
 ├── database.py           # SQLite 数据层（WAL 模式）
 ├── config.py             # 配置管理（YAML + 环境变量）
 └── models.py             # 数据模型定义

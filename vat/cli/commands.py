@@ -868,6 +868,88 @@ def process(ctx, video_id, process_all, playlist, stages, gpu, force, dry_run, c
         _auto_season_sync(config, db, logger, playlist)
 
 
+@cli.command()
+@click.option('--playlist', '-p', multiple=True, required=True, help='Playlist ID（可多次指定）')
+@click.option('--interval', '-i', default=None, type=int, help='轮询间隔（分钟），默认从配置读取')
+@click.option('--once', is_flag=True, help='单次模式：检查一次后退出')
+@click.option('--stages', '-s', default=None, help='处理阶段（逗号分隔），默认从配置读取')
+@click.option('--gpu', '-g', default='auto', help='GPU 设备: auto, cpu, cuda:0 等')
+@click.option('--concurrency', '-c', default=None, type=int, help='并发处理数，默认从配置读取')
+@click.option('--force', '-f', is_flag=True, help='强制重新处理')
+@click.option('--fail-fast', is_flag=True, help='失败时停止')
+@click.pass_context
+def watch(ctx, playlist, interval, once, stages, gpu, concurrency, force, fail_fast):
+    """
+    自动监控 Playlist 并处理新视频
+    
+    持续运行，定期同步指定的 Playlist，发现新视频后自动提交全流程处理任务。
+    
+    示例:
+    
+      # 持续监控（默认1小时间隔）
+      vat watch -p PLxxxFubuki
+      
+      # 同时监控多个 Playlist
+      vat watch -p PLxxxFubuki -p PLxxxMarine
+      
+      # 自定义间隔（30分钟）
+      vat watch -p PLxxxFubuki -i 30
+      
+      # 单次检查后退出（可搭配系统 cron）
+      vat watch -p PLxxxFubuki --once
+      
+      # 指定 GPU 和并发
+      vat watch -p PLxxxFubuki -g cuda:0 -c 2
+    """
+    config = get_config(ctx.obj.get('config_path'))
+    logger = get_logger()
+    db = Database(config.storage.database_path, output_base_dir=config.storage.output_dir)
+    
+    # 从配置读取默认值
+    watch_config = config.watch
+    effective_interval = interval if interval is not None else watch_config.default_interval
+    effective_stages = stages if stages is not None else watch_config.default_stages
+    effective_concurrency = concurrency if concurrency is not None else watch_config.default_concurrency
+    
+    # 验证所有 playlist 存在
+    playlist_service = PlaylistService(db)
+    for pl_id in playlist:
+        pl = playlist_service.get_playlist(pl_id)
+        if not pl:
+            click.echo(f"错误: Playlist 不存在: {pl_id}", err=True)
+            click.echo("请先通过 vat playlist add 添加 Playlist", err=True)
+            return
+        logger.info(f"监控目标: {pl.title} ({pl_id})")
+    
+    logger.info(
+        f"Watch 配置: interval={effective_interval}min, stages={effective_stages}, "
+        f"gpu={gpu}, concurrency={effective_concurrency}, "
+        f"once={once}, force={force}"
+    )
+    
+    from ..services.watch_service import WatchService
+    
+    service = WatchService(
+        config=config,
+        db=db,
+        playlist_ids=list(playlist),
+        interval_minutes=effective_interval,
+        stages=effective_stages,
+        gpu_device=gpu,
+        concurrency=effective_concurrency,
+        force=force,
+        fail_fast=fail_fast,
+        once=once,
+    )
+    
+    try:
+        service.run()
+    except RuntimeError as e:
+        click.echo(f"错误: {e}", err=True)
+    except KeyboardInterrupt:
+        logger.info("用户中断，Watch 已停止")
+
+
 def _auto_season_sync(config, db, logger, playlist_id: str, retry_delay_minutes: int = 30):
     """
     批量上传后自动将视频添加到合集并排序。

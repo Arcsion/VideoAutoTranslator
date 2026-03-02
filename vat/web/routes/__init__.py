@@ -7,6 +7,7 @@ from .tasks import router as tasks_router
 from .files import router as files_router
 from .prompts import router as prompts_router
 from .bilibili import router as bilibili_router
+from .watch import router as watch_router
 
 __all__ = [
     "videos_router",
@@ -15,4 +16,5 @@ __all__ = [
     "files_router",
     "prompts_router",
     "bilibili_router",
+    "watch_router",
 ]
