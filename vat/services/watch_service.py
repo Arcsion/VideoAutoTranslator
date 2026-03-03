@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..config import Config
 from ..database import Database
+from ..downloaders import YouTubeDownloader
 from ..models import TaskStatus, DEFAULT_STAGE_SEQUENCE, TaskStep
 from ..services.playlist_service import PlaylistService
 from ..utils.logger import setup_logger
@@ -65,7 +66,13 @@ class WatchService:
     ):
         self.config = config
         self.db = db
-        self.playlist_service = PlaylistService(db)
+        downloader = YouTubeDownloader(
+            proxy=config.get_stage_proxy("downloader"),
+            video_format=config.downloader.youtube.format,
+            cookies_file=config.downloader.youtube.cookies_file,
+            remote_components=config.downloader.youtube.remote_components,
+        )
+        self.playlist_service = PlaylistService(db, downloader)
         self.playlist_ids = playlist_ids
         self.interval_minutes = interval_minutes
         self.stages = stages
