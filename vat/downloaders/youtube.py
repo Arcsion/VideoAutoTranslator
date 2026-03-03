@@ -126,6 +126,16 @@ class VideoInfoResult:
         return None
 
 
+class LiveStreamError(RuntimeError):
+    """视频正在直播中，拒绝下载。
+    
+    直播中的视频无法保证从头完整下载（HLS 分片可能被 CDN 清除），
+    应等直播结束后作为普通 VOD 下载。
+    调用方应捕获此异常并将视频标记为"待重试"而非"失败"。
+    """
+    pass
+
+
 def _is_retryable_network_error(error_msg: str) -> bool:
     """判断错误是否为可重试的瞬态网络问题
     
@@ -242,8 +252,6 @@ class YouTubeDownloader(PlatformDownloader):
             'extract_flat': extract_info_only,
             'logger': YtDlpLogger(),  # 使用自定义日志记录器
             'progress_hooks': [], # 可以添加进度回调
-            # 直播视频：从开头下载而非从请求时刻录制（非直播视频忽略此选项）
-            'live_from_start': True,
         }
         
         if self.proxy:
@@ -317,6 +325,14 @@ class YouTubeDownloader(PlatformDownloader):
         # 记录可用字幕信息
         available_subs = list(info.get('subtitles', {}).keys())
         available_auto_subs = list(info.get('automatic_captions', {}).keys())
+        
+        # ====== 直播检测：拒绝下载正在直播的视频 ======
+        live_status = info.get('live_status')
+        if live_status == 'is_live' or info.get('is_live'):
+            raise LiveStreamError(
+                f"视频 {video_id} 正在直播中（live_status={live_status}），"
+                f"拒绝下载。直播结束后将作为普通 VOD 自动处理。"
+            )
         
         # ====== Phase 2: 下载视频和字幕（带网络重试） ======
         logger.info(f"开始下载视频: {title}")

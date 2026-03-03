@@ -560,6 +560,10 @@ class VideoProcessor:
                 **download_kwargs
             )
         except Exception as e:
+            # LiveStreamError 不包装为 DownloadError，让上层区分直播 vs 真正的下载失败
+            from ..downloaders.youtube import LiveStreamError
+            if isinstance(e, LiveStreamError):
+                raise
             raise DownloadError(f"下载失败: {e}", original_error=e)
         
         if 'video_path' not in result:
