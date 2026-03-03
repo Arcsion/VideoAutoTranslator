@@ -78,6 +78,13 @@ _RETRY_MAX_WAIT_SEC = 300        # 单次最大等待（秒）
 _RETRY_BACKOFF_FACTOR = 2        # 退避倍数
 _RETRY_MAX_TOTAL_SEC = 1800      # 最大总等待时间（30分钟）
 
+# 直播等待参数
+_LIVE_POLL_INTERVAL_SEC = 120    # 轮询直播状态的间隔（秒）
+_LIVE_FRAGMENT_ERROR_PATTERNS = [
+    r'fragment \d+ not found',
+    r'unable to continue',
+]
+
 
 def is_video_permanently_unavailable(error_msg: str) -> bool:
     """判断错误是否表示视频本身永久不可用（已删除/私有/会员限定等）
@@ -326,20 +333,19 @@ class YouTubeDownloader(PlatformDownloader):
         available_subs = list(info.get('subtitles', {}).keys())
         available_auto_subs = list(info.get('automatic_captions', {}).keys())
         
-        # ====== 直播检测：拒绝下载正在直播的视频 ======
+        # ====== Phase 2: 下载视频和字幕 ======
         live_status = info.get('live_status')
-        if live_status == 'is_live' or info.get('is_live'):
-            raise LiveStreamError(
-                f"视频 {video_id} 正在直播中（live_status={live_status}），"
-                f"拒绝下载。直播结束后将作为普通 VOD 自动处理。"
-            )
+        is_live = (live_status == 'is_live' or info.get('is_live'))
         
-        # ====== Phase 2: 下载视频和字幕（带网络重试） ======
-        logger.info(f"开始下载视频: {title}")
-        if download_subs and (available_subs or available_auto_subs):
-            logger.info(f"同时下载字幕 - 手动: {available_subs[:5]}, 自动: {available_auto_subs[:5]}...")
-        
-        self._download_with_retry(url, ydl_opts, video_id)
+        if is_live:
+            # 直播中：先尝试 live_from_start，失败则等待直播结束后下载
+            logger.info(f"检测到直播中（live_status={live_status}），尝试从开头下载...")
+            self._download_live_stream(url, output_dir, ydl_opts, video_id, download_subs, sub_langs)
+        else:
+            logger.info(f"开始下载视频: {title}")
+            if download_subs and (available_subs or available_auto_subs):
+                logger.info(f"同时下载字幕 - 手动: {available_subs[:5]}, 自动: {available_auto_subs[:5]}...")
+            self._download_with_retry(url, ydl_opts, video_id)
         
         # 查找下载的视频文件
         video_path = None
@@ -488,6 +494,137 @@ class YouTubeDownloader(PlatformDownloader):
                 time.sleep(wait_sec)
                 total_waited += wait_sec
                 wait_sec = min(wait_sec * _RETRY_BACKOFF_FACTOR, _RETRY_MAX_WAIT_SEC)
+    
+    def _download_live_stream(
+        self, url: str, output_dir: Path, ydl_opts: dict,
+        video_id: str, download_subs: bool, sub_langs: List[str]
+    ) -> None:
+        """处理直播视频的下载策略
+        
+        三阶段策略（在 download 步骤内阻塞，对上层透明）：
+        1. 尝试 live_from_start：如果直播刚开始，早期分片仍在 CDN，可从头完整下载
+        2. 如果 fragment 错误（早期分片已被 CDN 清除）：阻塞轮询等待直播结束
+        3. 直播结束后：作为普通 VOD 下载完整视频
+        
+        Args:
+            url: 视频 URL
+            output_dir: 输出目录
+            ydl_opts: 基础 yt-dlp 配置（不含 live_from_start）
+            video_id: 视频 ID
+            download_subs: 是否下载字幕
+            sub_langs: 字幕语言列表
+        """
+        # === 阶段 1：尝试 live_from_start ===
+        live_opts = {**ydl_opts, 'live_from_start': True}
+        try:
+            logger.info(f"[直播] 尝试 live_from_start 从开头下载: {video_id}")
+            with YoutubeDL(live_opts) as ydl:
+                ret_code = ydl.download([url])
+            if ret_code == 0:
+                logger.info(f"[直播] live_from_start 成功完成: {video_id}")
+                return
+            # 非零返回码但没有异常，检查文件是否已存在（可能是字幕下载失败等非致命错误）
+            for ext in ['mp4', 'webm', 'mkv']:
+                if (output_dir / f"{video_id}.{ext}").exists():
+                    logger.info(f"[直播] live_from_start 返回码 {ret_code}，但视频文件已存在")
+                    return
+            logger.warning(f"[直播] live_from_start 返回码 {ret_code}，视频文件不存在，进入等待模式")
+        except Exception as e:
+            error_msg = str(e)
+            if self._is_live_fragment_error(error_msg):
+                logger.warning(
+                    f"[直播] live_from_start 失败（早期分片已被 CDN 清除）: {error_msg[:120]}。"
+                    f"将等待直播结束后下载完整 VOD。"
+                )
+            else:
+                # 非 fragment 错误（网络/认证等），正常抛出
+                raise RuntimeError(f"直播下载失败: {error_msg}") from e
+        
+        # 清理 live_from_start 失败留下的残留文件
+        self._clean_partial_downloads(output_dir, video_id)
+        
+        # === 阶段 2：阻塞等待直播结束 ===
+        self._wait_for_stream_end(url, video_id)
+        
+        # === 阶段 3：直播结束，作为普通 VOD 下载 ===
+        logger.info(f"[直播] 直播已结束，开始下载完整 VOD: {video_id}")
+        # 重新构建 opts（直播结束后不需要 live_from_start，按普通视频下载）
+        vod_opts = self._get_ydl_opts(output_dir, download_subs=download_subs, sub_langs=sub_langs)
+        self._download_with_retry(url, vod_opts, video_id)
+    
+    def _wait_for_stream_end(self, url: str, video_id: str) -> None:
+        """阻塞轮询等待直播结束
+        
+        每 _LIVE_POLL_INTERVAL_SEC 秒检查一次直播状态。
+        直播结束（live_status 不再是 'is_live'）时返回。
+        
+        Args:
+            url: 视频 URL
+            video_id: 视频 ID（用于日志）
+        """
+        poll_count = 0
+        while True:
+            poll_count += 1
+            logger.info(
+                f"[直播] 等待直播结束... (第 {poll_count} 次轮询，"
+                f"间隔 {_LIVE_POLL_INTERVAL_SEC}s)"
+            )
+            time.sleep(_LIVE_POLL_INTERVAL_SEC)
+            
+            # 重新提取视频信息检查直播状态
+            try:
+                check_opts = {'quiet': True, 'logger': YtDlpLogger()}
+                if self.proxy:
+                    check_opts['proxy'] = self.proxy
+                if self.cookies_file:
+                    cookie_path = Path(self.cookies_file)
+                    if cookie_path.exists():
+                        check_opts['cookiefile'] = str(cookie_path)
+                if self.remote_components:
+                    check_opts['remote_components'] = self.remote_components
+                
+                with YoutubeDL(check_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                
+                if info is None:
+                    logger.warning(f"[直播] 轮询返回 None，继续等待...")
+                    continue
+                
+                live_status = info.get('live_status')
+                is_live = (live_status == 'is_live' or info.get('is_live'))
+                
+                if not is_live:
+                    logger.info(f"[直播] 直播已结束（live_status={live_status}）")
+                    return
+                
+                duration = info.get('duration', 0)
+                logger.info(
+                    f"[直播] 仍在直播中（live_status={live_status}，"
+                    f"当前时长≈{duration}s）"
+                )
+                
+            except Exception as e:
+                # 轮询失败不致命，继续等待
+                logger.warning(f"[直播] 轮询状态失败: {e}，继续等待...")
+    
+    @staticmethod
+    def _is_live_fragment_error(error_msg: str) -> bool:
+        """判断错误是否为直播分片不可用（早期分片被 CDN 清除）"""
+        for pattern in _LIVE_FRAGMENT_ERROR_PATTERNS:
+            if re.search(pattern, error_msg, re.IGNORECASE):
+                return True
+        return False
+    
+    @staticmethod
+    def _clean_partial_downloads(output_dir: Path, video_id: str) -> None:
+        """清理下载失败留下的残留文件（.part, .ytdl 等）"""
+        for pattern in [f"{video_id}.*", f"{video_id}.*.part"]:
+            for f in output_dir.glob(pattern):
+                try:
+                    f.unlink()
+                    logger.debug(f"清理残留文件: {f.name}")
+                except OSError:
+                    pass
     
     def get_playlist_urls(self, playlist_url: str) -> List[str]:
         """
