@@ -15,6 +15,11 @@ from vat.database import Database
 from vat.downloaders import YouTubeDownloader, VideoInfoResult
 from vat.utils.logger import setup_logger
 
+# 避免循环导入，Config 仅用于类型标注
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from vat.config import Config
+
 logger = setup_logger("playlist_service")
 
 # 全局翻译线程池（限制并发避免 LLM API 过载）
@@ -41,27 +46,38 @@ class SyncResult:
 class PlaylistService:
     """Playlist 管理服务"""
     
-    def __init__(self, db: Database, downloader: Optional[YouTubeDownloader] = None):
+    def __init__(self, db: Database, config: Optional['Config'] = None):
         """
         初始化 PlaylistService
         
         Args:
             db: 数据库实例
-            downloader: YouTube 下载器（用于获取 Playlist 信息）
+            config: VAT 配置（可选）。需要 sync/refresh 等下载操作时必须提供，
+                    纯 DB 查询（get_playlist, get_playlist_videos 等）无需 config。
+                    若未提供且需要下载器，会自动通过 load_config() 加载。
         """
         self.db = db
-        self._downloader = downloader
+        self._config = config
+        self._downloader: Optional[YouTubeDownloader] = None
     
     @property
     def downloader(self) -> YouTubeDownloader:
-        """延迟初始化下载器
+        """从 config 懒创建 YouTubeDownloader
         
-        注意：裸初始化不带 cookies/remote_components，仅用于 Playlist URL 解析等轻量操作。
-        完整功能（下载视频等）应由调用方传入已配置的 downloader。
+        首次访问时根据 config 中的 proxy/cookies/remote_components 创建完整配置的下载器。
+        若构造时未传 config，自动 load_config()。
         """
         if self._downloader is None:
-            logger.warning("PlaylistService 使用裸初始化的 YouTubeDownloader（无 cookies/remote_components）")
-            self._downloader = YouTubeDownloader()
+            if self._config is None:
+                from vat.config import load_config
+                logger.warning("PlaylistService 未传入 config，自动 load_config()")
+                self._config = load_config()
+            self._downloader = YouTubeDownloader(
+                proxy=self._config.get_stage_proxy("downloader"),
+                video_format=self._config.downloader.youtube.format,
+                cookies_file=self._config.downloader.youtube.cookies_file,
+                remote_components=self._config.downloader.youtube.remote_components,
+            )
         return self._downloader
     
     def sync_playlist(

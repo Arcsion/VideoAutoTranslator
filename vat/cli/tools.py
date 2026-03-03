@@ -70,14 +70,7 @@ def _get_bilibili_uploader(config):
 def _get_playlist_service(config, db):
     """创建 PlaylistService 实例"""
     from ..services.playlist_service import PlaylistService
-    from ..downloaders import YouTubeDownloader
-    downloader = YouTubeDownloader(
-        proxy=config.get_stage_proxy("downloader"),
-        video_format=config.downloader.youtube.format,
-        cookies_file=config.downloader.youtube.cookies_file,
-        remote_components=config.downloader.youtube.remote_components,
-    )
-    return PlaylistService(db, downloader)
+    return PlaylistService(db, config)
 
 
 # =============================================================================

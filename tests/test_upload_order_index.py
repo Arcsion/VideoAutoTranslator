@@ -53,9 +53,9 @@ def _get_order_index(db, playlist_id, video_id):
 
 
 def _get_service(db):
-    """构造 PlaylistService（只注入 db，不需要 downloader）"""
+    """构造 PlaylistService（只注入 db，纯 DB 查询无需 config）"""
     from vat.services.playlist_service import PlaylistService
-    return PlaylistService(db=db, downloader=None)
+    return PlaylistService(db=db)
 
 
 class TestAssignIndicesToNewVideos:

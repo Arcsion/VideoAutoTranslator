@@ -55,16 +55,9 @@ _sync_status = {}  # playlist_id -> {status, message, result}
 
 
 def get_playlist_service(db: Database = Depends(get_db)) -> PlaylistService:
-    from vat.downloaders import YouTubeDownloader
     from vat.config import load_config
     config = load_config()
-    downloader = YouTubeDownloader(
-        proxy=config.get_stage_proxy("downloader"),
-        video_format=config.downloader.youtube.format,
-        cookies_file=config.downloader.youtube.cookies_file,
-        remote_components=config.downloader.youtube.remote_components,
-    )
-    return PlaylistService(db, downloader)
+    return PlaylistService(db, config)
 
 
 @router.get("")

@@ -1384,14 +1384,7 @@ def playlist_add(ctx, url, sync):
     logger = get_logger()
     db = Database(config.storage.database_path, output_base_dir=config.storage.output_dir)
     
-    downloader = YouTubeDownloader(
-        proxy=config.get_stage_proxy("downloader"),
-        video_format=config.downloader.youtube.format,
-        cookies_file=config.downloader.youtube.cookies_file,
-        remote_components=config.downloader.youtube.remote_components,
-    )
-    
-    playlist_service = PlaylistService(db, downloader)
+    playlist_service = PlaylistService(db, config)
     
     try:
         result = playlist_service.sync_playlist(
@@ -1450,14 +1443,7 @@ def playlist_sync(ctx, playlist_id):
         click.echo(f"错误: Playlist 不存在: {playlist_id}", err=True)
         return
     
-    downloader = YouTubeDownloader(
-        proxy=config.get_stage_proxy("downloader"),
-        video_format=config.downloader.youtube.format,
-        cookies_file=config.downloader.youtube.cookies_file,
-        remote_components=config.downloader.youtube.remote_components,
-    )
-    
-    playlist_service = PlaylistService(db, downloader)
+    playlist_service = PlaylistService(db, config)
     
     try:
         result = playlist_service.sync_playlist(
@@ -1510,14 +1496,7 @@ def playlist_refresh(ctx, playlist_id, force_refetch, force_retranslate):
                     "如只需重新翻译，请使用 'vat playlist retranslate'", err=True)
         return
     
-    downloader = YouTubeDownloader(
-        proxy=config.get_stage_proxy("downloader"),
-        video_format=config.downloader.youtube.format,
-        cookies_file=config.downloader.youtube.cookies_file,
-        remote_components=config.downloader.youtube.remote_components,
-    )
-    
-    playlist_service = PlaylistService(db, downloader)
+    playlist_service = PlaylistService(db, config)
     
     try:
         result = playlist_service.refresh_videos(

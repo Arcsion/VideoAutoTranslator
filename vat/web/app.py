@@ -824,7 +824,6 @@ def _auto_sync_stale_playlists():
     import threading
     from datetime import timedelta
     from vat.services import PlaylistService
-    from vat.downloaders import YouTubeDownloader
     
     config = load_config()
     db = Database(config.storage.database_path, output_base_dir=config.storage.output_dir)
@@ -851,13 +850,7 @@ def _auto_sync_stale_playlists():
     def sync_one(pl):
         try:
             sync_db = Database(config.storage.database_path, output_base_dir=config.storage.output_dir)
-            downloader = YouTubeDownloader(
-                proxy=config.get_stage_proxy("downloader"),
-                video_format=config.downloader.youtube.format,
-                cookies_file=config.downloader.youtube.cookies_file,
-                remote_components=config.downloader.youtube.remote_components,
-            )
-            service = PlaylistService(sync_db, downloader)
+            service = PlaylistService(sync_db, config)
             result = service.sync_playlist(
                 pl.source_url,
                 auto_add_videos=True,
