@@ -89,7 +89,7 @@ _UPCOMING_EVENT_PATTERNS = [
 ]
 
 # 直播等待参数
-_LIVE_POLL_INTERVAL_SEC = 600    # 轮询直播状态的间隔（秒）
+_LIVE_POLL_INTERVAL_SEC = 300    # 轮询直播状态的间隔（秒）
 _LIVE_FROM_START_MAX_RETRIES = 3 # live_from_start 因 fragment 错误失败时的最大重试次数
 _LIVE_FROM_START_RETRY_WAIT = 30 # live_from_start 重试间隔（秒）
 _LIVE_FRAGMENT_ERROR_PATTERNS = [
@@ -368,12 +368,16 @@ class YouTubeDownloader(PlatformDownloader):
         ydl_opts = self._get_ydl_opts(output_dir, download_subs=download_subs, sub_langs=sub_langs)
         
         # ====== Phase 1: 提取视频信息（带网络重试） ======
+        # extract_info 阶段必须关闭 ignoreerrors，否则 yt-dlp 对 upcoming 视频
+        # 会静默返回 None 而不抛异常，导致无法触发 VideoUpcomingError 等待逻辑
+        extract_opts = {k: v for k, v in ydl_opts.items() if k != 'ignoreerrors'}
+        
         # 预约/首播视频：yt-dlp 在 extract_info 就会抛 VideoUpcomingError，
         # 此时阻塞轮询等待视频开始，类似直播等待机制
         upcoming_poll_count = 0
         while True:
             try:
-                info = self._extract_info_with_retry(url, ydl_opts)
+                info = self._extract_info_with_retry(url, extract_opts)
                 break  # 成功获取 info，跳出等待循环
             except VideoUpcomingError as e:
                 upcoming_poll_count += 1
@@ -498,19 +502,12 @@ class YouTubeDownloader(PlatformDownloader):
             except Exception as e:
                 error_msg = str(e)
                 
-                # 调试：输出实际异常类型和消息
-                logger.debug(f"捕获异常: type={type(e).__name__}, msg={error_msg[:200]}")
-                
                 # 预约/首播视频：yt-dlp 在 extract_info 就会抛异常，
                 # 必须在网络重试判断之前检测，否则会被包装为通用 RuntimeError
                 if is_upcoming_event_error(error_msg):
                     raise VideoUpcomingError(
                         f"视频为预约/首播状态，尚未开始: {error_msg}"
                     ) from e
-                
-                # 调试：如果不是 upcoming，输出为什么没匹配
-                if "live event will begin" in error_msg.lower() or "premieres in" in error_msg.lower():
-                    logger.warning(f"Upcoming 模式匹配失败，实际消息: {error_msg}")
                 
                 if not _is_retryable_network_error(error_msg):
                     # 不可重试（YouTube 限制等），立即失败
