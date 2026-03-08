@@ -1107,9 +1107,12 @@ class VideoProcessor:
         """
         import subprocess
         
+        # aresample=async=1: 对直播录制视频中的音频时间戳间隙填充静音，
+        # 确保 WAV 时长与 MP4 视频流一致，避免字幕时间轴累进偏移
         cmd = [
             'ffmpeg', '-y', '-i', str(video_path),
-            '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+            '-vn', '-af', 'aresample=async=1',
+            '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
             str(audio_path)
         ]
         
