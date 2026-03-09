@@ -183,6 +183,30 @@ class PlaylistService:
                         callback(f"[{index}/{total_videos}] 关联已有视频: {existing_video.title[:40]}...")
                     else:
                         # 创建新视频记录
+                        # thumbnail: flat extract 返回 thumbnails（复数列表），
+                        # 而非 thumbnail（单数），需要兼容两种格式
+                        thumb = entry.get('thumbnail') or ''
+                        if not thumb:
+                            thumbs_list = entry.get('thumbnails')
+                            if thumbs_list and isinstance(thumbs_list, list):
+                                thumb = thumbs_list[-1].get('url', '') if thumbs_list[-1] else ''
+                        
+                        entry_meta = {
+                            'duration': entry.get('duration') or 0,
+                            # flat extract 的 entry 中 uploader key 存在但值为 None，
+                            # dict.get('uploader', channel) 不会 fallback，必须用 or
+                            'uploader': entry.get('uploader') or channel,
+                            'thumbnail': thumb,
+                            'upload_date': entry.get('upload_date') or '',
+                        }
+                        # 保留 entry 中的额外有用字段
+                        if entry.get('description'):
+                            entry_meta['description'] = entry['description']
+                        if entry.get('live_status'):
+                            entry_meta['live_status'] = entry['live_status']
+                        if entry.get('release_timestamp'):
+                            entry_meta['release_timestamp'] = entry['release_timestamp']
+                        
                         video = Video(
                             id=video_id,
                             source_type=SourceType.YOUTUBE,
@@ -190,14 +214,7 @@ class PlaylistService:
                             title=entry.get('title', ''),
                             playlist_id=playlist_id,
                             playlist_index=index,
-                            metadata={
-                                'duration': entry.get('duration') or 0,
-                                # flat extract 的 entry 中 uploader key 存在但值为 None，
-                                # dict.get('uploader', channel) 不会 fallback，必须用 or
-                                'uploader': entry.get('uploader') or channel,
-                                'thumbnail': entry.get('thumbnail') or '',
-                                'upload_date': entry.get('upload_date') or '',
-                            }
+                            metadata=entry_meta,
                         )
                         self.db.add_video(video)
                         # 添加到关联表
@@ -254,6 +271,7 @@ class PlaylistService:
                     if video:
                         info = result.info
                         metadata = video.metadata or {}
+                        
                         metadata['upload_date'] = result.upload_date
                         metadata['duration'] = info.get('duration') or 0
                         metadata['thumbnail'] = info.get('thumbnail') or ''
@@ -265,6 +283,7 @@ class PlaylistService:
                         metadata['like_count'] = info.get('like_count') or 0
                         # 成功获取时，清除可能存在的错误 unavailable 标记
                         metadata.pop('unavailable', None)
+                        metadata.pop('unavailable_reason', None)
                         metadata.pop('upload_date_interpolated', None)
                         self.db.update_video(vid, metadata=metadata)
                     
