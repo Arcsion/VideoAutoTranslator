@@ -28,8 +28,8 @@ PROCESSED_FILE_NAMES = {
 
 # 已知的处理产物后缀
 # .ass: 字幕样式文件
-# .wav: 本地提取的音频（YouTube 下载的音频是 m4a 格式，wav 是 whisper 阶段从视频提取的）
-PROCESSED_SUFFIXES = {".ass", ".wav"}
+# 注意：.wav 已移至 cache_dir/audio_temp/（不再出现在 output 目录）
+PROCESSED_SUFFIXES = {".ass"}
 
 
 def is_processed_file(filepath: Path) -> bool:

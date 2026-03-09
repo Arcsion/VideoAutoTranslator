@@ -2017,8 +2017,63 @@ def season_sync(db, uploader: BilibiliUploader, playlist_id: str) -> Dict[str, A
         for vid, aid, title in aid_not_found:
             logger.warning(f"  - {vid} (av{aid}): {title}")
     
+    # === 一致性校验：检测 DB 标记 season_added=True 但实际不在合集的视频 ===
+    # 场景：sync_season_episode_titles 删后重加失败、B站侧移除、其他异常
+    # 对每个涉及的合集，获取实际视频列表，与 DB 标记对比，不一致的自动重新添加
+    all_season_ids = set()
+    for v in videos:
+        meta = v.metadata or {}
+        sid = meta.get('bilibili_target_season_id')
+        if sid and meta.get('bilibili_aid') and meta.get('bilibili_season_added'):
+            all_season_ids.add(int(sid))
+    # 也包含本轮新添加涉及的合集
+    all_season_ids.update(result['season_ids'])
+    
+    desync_fixed = 0
+    desync_failed = 0
+    for sid in all_season_ids:
+        try:
+            season_data = uploader.get_season_episodes(sid)
+            if not season_data:
+                continue
+            actual_aids = {ep['aid'] for ep in season_data.get('episodes', [])}
+            
+            # 找 DB 标记 season_added=True 但实际不在合集的视频
+            for v in videos:
+                meta = v.metadata or {}
+                if (meta.get('bilibili_season_added') and 
+                    meta.get('bilibili_target_season_id') and 
+                    int(meta['bilibili_target_season_id']) == sid):
+                    aid = meta.get('bilibili_aid')
+                    if aid and aid not in actual_aids:
+                        title = (v.title or v.id)[:40]
+                        logger.warning(
+                            f"[一致性修复] {v.id} (av{aid}) DB 标记已入集但实际不在合集 {sid}，重新添加..."
+                        )
+                        if uploader.add_to_season(int(aid), sid):
+                            desync_fixed += 1
+                            logger.info(f"  ✓ 重新添加成功: {title}")
+                        else:
+                            desync_failed += 1
+                            # 修正 DB 标记，避免下次 sync 仍然跳过
+                            updated_meta = dict(meta)
+                            updated_meta['bilibili_season_added'] = False
+                            db.update_video(v.id, metadata=updated_meta)
+                            logger.error(f"  ✗ 重新添加失败: {title}（已修正 DB 标记为 False）")
+                        time.sleep(3)
+        except Exception as e:
+            logger.warning(f"一致性校验合集 {sid} 异常: {e}")
+    
+    if desync_fixed or desync_failed:
+        result['diagnostics']['desync_fixed'] = desync_fixed
+        result['diagnostics']['desync_failed'] = desync_failed
+        logger.info(
+            f"[一致性校验] 修复 {desync_fixed} 个不一致视频"
+            f"{f'，{desync_failed} 个修复失败' if desync_failed else ''}"
+        )
+    
     # 对涉及的每个合集执行排序
-    for season_id in result['season_ids']:
+    for season_id in all_season_ids:
         try:
             if uploader.auto_sort_season(season_id):
                 logger.info(f"✓ 合集 {season_id} 排序完成")
@@ -2034,6 +2089,10 @@ def season_sync(db, uploader: BilibiliUploader, playlist_id: str) -> Dict[str, A
         diag_msgs.append(f"{len(diag['upload_completed_no_aid'])} 个 upload 完成但无 aid")
     if diag['aid_not_found_on_bilibili']:
         diag_msgs.append(f"{len(diag['aid_not_found_on_bilibili'])} 个 aid 在B站查不到")
+    if diag.get('desync_fixed'):
+        diag_msgs.append(f"{diag['desync_fixed']} 个不一致视频已修复")
+    if diag.get('desync_failed'):
+        diag_msgs.append(f"{diag['desync_failed']} 个不一致视频修复失败")
     
     diag_str = f"，诊断问题: {'; '.join(diag_msgs)}" if diag_msgs else ""
     logger.info(

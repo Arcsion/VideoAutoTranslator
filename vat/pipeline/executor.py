@@ -90,6 +90,11 @@ class VideoProcessor:
         self.output_dir = Path(self.video.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
+        # 音频临时目录：WAV 等过程性文件不放在 output_dir（用户可见目录），
+        # 而放在 cache_dir/audio_temp/{video_id}/（对用户不可见，仅作为 ASR 中间文件和缓存）
+        self._audio_temp_dir = Path(config.storage.cache_dir).expanduser() / "audio_temp" / video_id
+        self._audio_temp_dir.mkdir(parents=True, exist_ok=True)
+        
         # 设置GPU环境变量
         if gpu_id is not None:
             os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
@@ -659,6 +664,10 @@ class VideoProcessor:
         title = result.get('title', '')
         subtitles = result.get('subtitles', {})
         
+        # 下载成功获取到真实 upload_date 后，清除 sync 阶段设置的插值标记
+        if result_metadata.get('upload_date'):
+            metadata.pop('upload_date_interpolated', None)
+        
         # === Step 4: 处理字幕信息（按数据可用性） ===
         available_manual = metadata.get('available_subtitles', [])
         available_auto = metadata.get('available_auto_subtitles', [])
@@ -888,7 +897,7 @@ class VideoProcessor:
         self._progress_with_tracker(f"开始 Whisper 语音识别: {video_file}")
         
         try:
-            audio_file = self.output_dir / f"{video_file.stem}.wav"
+            audio_file = self._audio_temp_dir / f"{video_file.stem}.wav"
             
             # ====== 人声分离处理 ======
             asr_audio_file = audio_file  # 默认使用原始音频
@@ -896,7 +905,7 @@ class VideoProcessor:
             use_vocal_separation = self._should_use_vocal_separation(video_metadata)
             
             if use_vocal_separation:
-                vocals_file = self.output_dir / f"{video_file.stem}_vocals.wav"
+                vocals_file = self._audio_temp_dir / f"{video_file.stem}_vocals.wav"
                 
                 # 检查是否已有分离结果
                 if vocals_file.exists():
@@ -920,7 +929,7 @@ class VideoProcessor:
                         
                         result = separator.separate(
                             audio_path=audio_file,
-                            output_dir=self.output_dir,
+                            output_dir=self._audio_temp_dir,
                             save_accompaniment=vocal_sep_config.save_accompaniment,
                         )
                         
