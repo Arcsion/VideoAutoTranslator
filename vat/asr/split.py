@@ -69,8 +69,10 @@ def split_by_llm(
     Returns:
         断句后的文本列表
     """
-    assert text and isinstance(text, str), "调用契约错误: text 必须是非空字符串"
+    assert text is not None and isinstance(text, str), "调用契约错误: text 必须是非空字符串"
     assert mode in ("sentence", "semantic"), f"调用契约错误: mode 必须是 'sentence' 或 'semantic'，得到 '{mode}'"
+    if not text:
+        return ['']
     
     current_model = model
     

@@ -222,7 +222,31 @@ def _load_model_with_memory_check(
     from .whisper_wrapper import WhisperASR
     asr = WhisperASR(**whisper_kwargs)
     # 触发模型加载（_ensure_model_loaded 在 asr_audio 中调用，但这里提前加载以尽早发现问题）
-    asr._ensure_model_loaded()
+    # 网络错误容错：faster-whisper 即使模型已缓存也会尝试访问 HuggingFace 验证，
+    # 网络不稳定时会抛出 SSLError/ConnectionError 导致 worker 崩溃。
+    # 策略：首次加载失败时，设置 HF_HUB_OFFLINE=1 强制使用本地缓存重试。
+    _LOAD_MAX_RETRIES = 2
+    for attempt in range(_LOAD_MAX_RETRIES):
+        try:
+            asr._ensure_model_loaded()
+            break
+        except (OSError, Exception) as e:
+            error_msg = str(e).lower()
+            is_network_error = any(kw in error_msg for kw in [
+                'ssl', 'connection', 'timeout', 'max retries', 'urlopen',
+                'network', 'socket', 'eof occurred',
+            ])
+            if is_network_error and attempt < _LOAD_MAX_RETRIES - 1:
+                worker_logger.warning(
+                    f"GPU {gpu_id} 模型加载网络错误 (尝试 {attempt+1}/{_LOAD_MAX_RETRIES}): "
+                    f"{type(e).__name__}: {e}"
+                )
+                worker_logger.info(f"GPU {gpu_id} 设置 HF_HUB_OFFLINE=1，使用本地缓存重试")
+                os.environ["HF_HUB_OFFLINE"] = "1"
+                # 重新创建 ASR 实例（旧实例可能处于异常状态）
+                asr = WhisperASR(**whisper_kwargs)
+            else:
+                raise
     worker_logger.info(f"GPU {gpu_id} 模型加载完成")
     return asr
 
