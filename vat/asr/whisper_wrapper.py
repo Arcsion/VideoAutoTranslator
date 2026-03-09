@@ -650,10 +650,14 @@ class WhisperASR:
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 使用ffmpeg提取音频为16kHz单声道WAV
+        # aresample=async=1: 对直播录制视频中的音频时间戳间隙填充静音，
+        # 确保 WAV 时长与 MP4 视频流一致，避免字幕时间轴累进偏移。
+        # 对无间隙视频验证为完全无损（二进制一致），可安全作为默认行为。
         cmd = [
             'ffmpeg',
             '-i', str(video_path),
             '-vn',  # 不处理视频
+            '-af', 'aresample=async=1',
             '-acodec', 'pcm_s16le',  # 16位PCM编码
             '-ac', '1',  # 单声道
             '-ar', '16000',  # 16kHz采样率
