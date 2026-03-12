@@ -1,7 +1,7 @@
 # 翻译模型评测 & ASR质量评估 综合报告
 
-**评测时间**：2026年2月
-**评测目标**：评估国产模型替代Gemini做VTuber字幕翻译的可行性，以及ASR质量改进方向
+**评测时间**：2026年2月—3月
+**评测目标**：评估替代模型做VTuber字幕翻译的可行性，以及ASR质量改进方向
 
 ---
 
@@ -14,6 +14,7 @@
 | 火山引擎方舟 | 火山引擎(字节) | 按量付费 | deepseek-v3.2, doubao系列 |
 | DashScope | 阿里云 | 按量付费 | qwen3-max, qwen3.5-plus, glm-5, MiniMax-M2.5 |
 | gpt-5-nano | videocaptioner中转站 | 按量付费 | gpt-5-nano |
+| **phpth 中转站** | **第三方(免费)** | **免费** | **gpt-5.4（标称含 claude 但均为 GPT 马甲）** |
 | Gemini-3-flash | Google API | ~¥150/20k次 | Gemini-3-flash |
 
 火山引擎与 DashScope 共有模型：kimi-k2.5, glm-4.7。跨厂商验证确认同模型质量完全一致。
@@ -26,7 +27,7 @@
 - 逐条定性阅读评估（非机械指标），对照原文日语+Gemini翻译+测试模型翻译
 - 中文版提示词和few-shot示例存放在 `scripts/translation_benchmark_prompts/`
 
-### 测试视频（共12个）
+### 测试视频（共16个）
 
 | 视频ID | 内容类型 | 字幕条数 | 采样 |
 |--------|---------|---------|------|
@@ -42,6 +43,9 @@
 | DoDiPWf0Rg4 | 恐怖游戏杂谈 | 401 | 80 |
 | IEYQQQFmxak | 马里奥卡丁车REVENGE | 212 | 100 |
 | ajda3lbz6Mk | 风来のシレン | 237 | 100 |
+| 8Q6WtSDdbNk | 初配信(Live2D展示) | 313 | 全量(phpth) |
+| cgbcUfgQF6M | Only Up实况 | 509 | 全量(phpth) |
+| jjPBUsN5jl4 | 杂谈配信 | 725 | 全量(phpth) |
 
 ---
 
@@ -78,12 +82,13 @@
 | 1 | **kimi-k2.5** | **火山引擎方舟** | 最活泼可爱，VTuber味浓 | 176s | ⭐⭐⭐⭐½ |
 | 2 | **deepseek-v3.2** | **火山引擎方舟** | 语义准确，风格偏正经 | 145s | ⭐⭐⭐⭐ |
 | 3 | **qwen3-max** | **DashScope** | 自然流畅，偶尔更准确 | ~180s | ⭐⭐⭐⭐ |
-| 4 | qwen3.5-plus | DashScope | 偏正式/平淡 | 慢 | ⭐⭐⭐ |
-| 5 | doubao-seed-code | 火山引擎方舟 | 中规中矩 | 93s(50条) | ⭐⭐⭐ |
-| 6 | gpt-5-nano | 中转站 | 平淡，招牌语丢失 | 快 | ⭐⭐⭐ |
-| 7 | glm-5 | DashScope | 可用但无特色 | 很慢 | ⭐⭐½ |
-| 8 | doubao-seed-2.0-code | 火山引擎方舟 | 最快但有错译风险 | 59s(50条) | ⭐⭐½ |
-| 9 | MiniMax-M2.5 | DashScope | optimize无效，翻译勉强 | 快 | ⭐⭐ |
+| 4 | **phpth-gpt-5.4** | **phpth中转站(免费)** | prompt遵循强，人名偏罗马字 | 69s(bs30,t10) | ⭐⭐⭐⭐ |
+| 5 | qwen3.5-plus | DashScope | 偏正式/平淡 | 慢 | ⭐⭐⭐ |
+| 6 | doubao-seed-code | 火山引擎方舟 | 中规中矩 | 93s(50条) | ⭐⭐⭐ |
+| 7 | gpt-5-nano | 中转站 | 平淡，招牌语丢失 | 快 | ⭐⭐⭐ |
+| 8 | glm-5 | DashScope | 可用但无特色 | 很慢 | ⭐⭐½ |
+| 9 | doubao-seed-2.0-code | 火山引擎方舟 | 最快但有错译风险 | 59s(50条) | ⭐⭐½ |
+| 10 | MiniMax-M2.5 | DashScope | optimize无效，翻译勉强 | 快 | ⭐⭐ |
 | - | glm-4.7 | 火山引擎方舟/DashScope | 可用但太慢(668s/50条) | - | ⭐ |
 | - | kimi-k2-thinking | 火山引擎方舟 | 翻译任务失败 | - | ❌ |
 | - | auto | 火山引擎方舟 | 不支持指定模型 | - | ❌ |
@@ -119,6 +124,62 @@
 | 语气还原 | ⭐⭐½ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
 
 nano核心问题：VTuber招牌语丢失（`こんこんきーつね` → "嗨，大家好～"❌），语义错误频率高。
+
+### phpth gpt-5.4 vs Gemini 对比（7个视频全量，fubuki prompt）
+
+phpth 中转站标称提供 claude-opus-4-6 / claude-sonnet-4-6 / gpt-5.4 等模型，实测 claude 均为 GPT 马甲（claude-opus-4-6 → gpt-5.4, claude-sonnet-4-6 → gpt-5.2-codex）。sonnet 路由到的 gpt-5.2-codex 在 optimize 阶段出现灾难级错误（"白上フブキ"→"白髪ロボ子"），不可用。以下仅分析 gpt-5.4。
+
+测试配置：batch_size=30, thread_num=10, fubuki prompt(en), reflect mode。batch_size 受 API 端 nginx 超时限制，translate+reflect 模式下 bs≥80 会 504，推荐 bs=30。
+
+#### phpth 胜出的场景
+
+```
+jjPBUsN5jl4: "FANBOXはいつ更新"
+  phpth:  FANBOX什么时候更新 ✅    ← ASR纠错正确
+  Gemini: HOMEBOX什么时候更新 ❌
+
+jjPBUsN5jl4: "Cですよね"（クリスマスのク→C双关）
+  phpth:  应该是C吧 ✅             ← 捕捉到双关语
+  Gemini: 对吧？ ❌                ← 完全漏掉
+
+_QOMPli80JA: "こんこんきーつね"
+  phpth:  晚上好狐～ ✅             ← 严格遵循fubuki prompt
+  Gemini: 空空狐狸～
+```
+
+#### Gemini 胜出的场景
+
+```
+8Q6WtSDdbNk: "ルズルルズです"
+  phpth:  我是Ruzururuzu ❌         ← 未识别画师名
+  Gemini: 我是Rurudo ✅
+
+DoDiPWf0Rg4: "ケイコさん/マサイさん"
+  phpth:  Keiko/Masai（罗马字）      ← 人名未汉化
+  Gemini: 惠子/昌江（汉字） ✅
+
+jjPBUsN5jl4: "冬コミ出ない"
+  phpth:  不参加冬Comic Market      ← 直译
+  Gemini: 不去冬漫展 ✅              ← 本地化
+```
+
+#### 综合评分
+
+| 维度 | phpth gpt-5.4 | Gemini |
+|------|--------------|--------|
+| ASR 纠错 | 70 | **85** |
+| 人名处理 | 60（偏罗马字） | **90**（汉化） |
+| VTuber 语感 | 75 | **85** |
+| prompt 遵循 | **90** | 75 |
+| 双关/梗识别 | **80** | 70 |
+| 事实准确性 | 85 | 85 |
+| **综合** | **~77** | **~82** |
+
+日常对话、游戏实况、叙事准确性基本持平，差距集中在人名汉化和 ASR 纠错。
+
+#### 并发能力
+
+100 API 并发（10视频×10线程）零失败，吞吐上限约 3.6 段/s。稳定性良好，但存在总吞吐天花板。
 
 ---
 
@@ -272,8 +333,9 @@ asr:
 | **优化(optimize)** | **kimi-k2.5** | **火山引擎方舟** | **已集成**。同语言optimize阶段有良好ASR纠错能力 |
 | **断句(split)** | gpt-4o-mini | 中转站 | 测试国产模型效果不佳（过度断句），保持不变 |
 | **场景识别** | gpt-4o-mini | 中转站 | 对模型要求低 |
+| **翻译(备用)** | phpth-gpt-5.4 | phpth中转站(免费) | Gemini不可用时的后备，bs≤50，质量~77分(Gemini~82) |
 
-> **关于translate是否替换为国产模型**：从837条定性评估看，81%持平、10%Gemini更好（主要是ASR纠错）。如果视频ASR质量普遍正常，可以考虑替换以节省成本。需进一步全流程测试确认。
+> **关于translate是否替换**：从837条定性评估看，81%持平、10%Gemini更好（主要是ASR纠错）。phpth gpt-5.4 免费但人名汉化和 ASR 纠错不如 Gemini，适合做备用通道而非主力。
 
 ### Split 阶段国产模型测试
 
@@ -376,6 +438,7 @@ Few-shot prompt文件：`scripts/translation_benchmark_prompts/custom_translate_
 | **火山引擎 kimi-k2.5** | **按量付费** | **⭐⭐⭐⭐** | **推荐 optimize 用** |
 | DashScope kimi-k2.5 | 按量付费 | ⭐⭐⭐⭐ | 备用 |
 | 中转站 nano | 按量付费 | ⭐⭐⭐ | 取决于余额 |
+| **phpth gpt-5.4** | **免费** | **⭐⭐⭐⭐** | **免费备用，bs≤50，人名偏罗马字** |
 
 ### 混合方案可行性
 
@@ -400,25 +463,180 @@ Few-shot prompt文件：`scripts/translation_benchmark_prompts/custom_translate_
 | **翻译后异常检测** | 中 | 待做 | 自动检测乱码/幻觉/长度异常 |
 | **混合方案原型** | 中 | 待做 | ASR低置信度段落检测 + kimi+Gemini混合调用 |
 | **并发控制测试** | 低 | 待做 | thread_num=5稳定性（当前thread=3无问题） |
+| **phpth 免费中转站评估** | 中 | ✅ 已完成 | 7视频全量+并发压测，质量~77分（Gemini~82分），适合做备用通道。详见第四章 |
 
 ---
 
-## 十、API 端点信息
+## 十、Gemini 系列型号横向评测
 
-| 服务 | 提供商 | Base URL | 主要用途 |
-|------|--------|----------|--------|
-| 火山引擎方舟 | 火山引擎 | `https://ark.cn-beijing.volces.com/api/v3` | **optimize 主力** |
-| DashScope | 阿里云 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 备用 |
-| videocaptioner中转站 | 第三方 | `https://api.videocaptioner.cn` | split/scene_identify |
+**评测时间**：2026年3月10日
+**评测目标**：对比 Gemini 系列 4 个型号的翻译质量与成本效益，寻找比当前生产模型 gemini-3-flash 更具性价比的替代方案。
+
+### 10.1 测试模型与定价
+
+| 模型 | API Model ID | Input $/1M | Output $/1M | 相对成本 | 定位 |
+|------|-------------|------------|-------------|---------|------|
+| **Gemini 3 Flash** | `gemini-3-flash-preview` | $0.50 | $3.00 | 1.00x | 当前生产模型 |
+| **Gemini 3.1 Flash-Lite** | `gemini-3.1-flash-lite-preview` | $0.25 | $1.50 | 0.50x | 3代最新轻量版 |
+| **Gemini 2.5 Flash** | `gemini-2.5-flash` | $0.30 | $2.50 | 0.80x | 上一代主力 (thinking 模型) |
+| **Gemini 2.5 Flash-Lite** | `gemini-2.5-flash-lite` | $0.10 | $0.40 | 0.14x | 上一代轻量版 |
+
+### 10.2 测试配置
+
+完全匹配生产 `config/default.yaml` 配置：
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| optimize 模型 | kimi-k2.5 (volc) | 所有视频统一用 kimi-k2.5 做 optimize |
+| translate 模型 | 4 个 Gemini 模型分别测试 | 仅 translate 阶段使用不同 Gemini 模型 |
+| reflect | true | 反思模式 |
+| batch_size | 100 | 与生产一致 |
+| thread_num | 10 | 与生产一致 |
+| custom_prompt | fubuki (English) | 与生产一致 |
+| sample | 0 (全量) | 不采样 |
+| proxy | http://localhost:7990 | Google API 代理 |
+
+测试覆盖全部 15 个视频（共 5462 条字幕），包括双人对话、美食实况、赛车游戏（ASR差）、恐怖游戏、杂谈、初配信等多种场景。
+
+### 10.3 速度与吞吐量对比
+
+| 模型 | 总翻译时间 | 平均速度(条/秒) | 相对速度 |
+|------|-----------|---------------|---------|
+| Gemini 3 Flash | 695s (11.6min) | 7.9 | 1.0x |
+| Gemini 3.1 Flash-Lite | **313s (5.2min)** | **17.4** | **2.2x** |
+| Gemini 2.5 Flash | 1072s (17.9min) | 5.1 | 0.6x |
+| Gemini 2.5 Flash-Lite | 380s (6.3min) | 14.4 | 1.8x |
+
+- **3.1-flash-lite 速度最快**，是 3-flash 的 2.2 倍
+- **2.5-flash 最慢**，比 3-flash 还慢 54%，因为它是 thinking 模型，内部有推理过程
+- 两个 lite 模型速度都远快于非 lite 版本
+
+### 10.4 翻译质量逐条定性评估
+
+#### Gemini 3 Flash（当前生产模型）
+
+整体最优。翻译自然流畅、VTuber 风格把握准确，专有名词处理正确：
+
+| 表现维度 | 评价 |
+|---------|------|
+| VTuber 口吻/语感 | 活泼自然，符合白上吹雪人设（"耶——！"、"嘿咻——"、"真的好厉害呢～"） |
+| 专有名词 | 正确翻译 Roboco前辈、すこん部等 VTuber 术语 |
+| ASR 纠错补偿 | 能较好地推断 ASR 错误的真实含义 |
+| 语义准确性 | 高，极少出现误译 |
+| 空翻译/乱码 | 0 条（5462 条中） |
+
+#### Gemini 3.1 Flash-Lite（半价模型）
+
+质量可接受，是性价比最优候选。翻译基本正确但风格略显平淡：
+
+| 表现维度 | 评价 |
+|---------|------|
+| VTuber 口吻/语感 | 偏朴素，少了些活泼感（"我是白上吹雪。"vs 3-flash 的"我是白上吹雪～！"） |
+| 专有名词 | 大部分正确，偶尔丢失细节（"硬币"vs"金币"） |
+| ASR 纠错补偿 | 一般，对严重 ASR 错误的推断能力弱于 3-flash |
+| 语义准确性 | 较高，少数口语化表达翻译偏机械 |
+| 空翻译/乱码 | 0 条 |
+
+典型案例对比（_QOMPli80JA #7）：
+- 原文：もう、では早速ロボ子先輩をびっくりさせちゃいましょーう
+- 3-flash：那么这就赶快去吓Roboco前辈一跳吧～
+- 3.1-lite：那么赶紧来吓Roboco前辈一跳吧！
+- 评价：3.1-lite 翻译正确但少了"这就"等连接词带来的口语自然感
+
+#### Gemini 2.5 Flash（上一代 thinking 模型）
+
+质量与 3-flash 接近，但速度最慢、性价比低：
+
+| 表现维度 | 评价 |
+|---------|------|
+| VTuber 口吻/语感 | 较好，但有时偏书面化（"事不宜迟"等略正式的表达） |
+| 专有名词 | 基本正确 |
+| ASR 纠错补偿 | 与 3-flash 相当 |
+| 语义准确性 | 高，但偶有空翻译（3条/5462条） |
+| 速度 | **最慢**（thinking 模型开销），比 3-flash 慢 54% |
+
+不推荐：质量与 3-flash 持平，但速度慢 54%、价格仅便宜 20%，性价比最差。
+
+#### Gemini 2.5 Flash-Lite（最便宜模型）
+
+**存在严重质量问题，不推荐用于生产**：
+
+| 表现维度 | 评价 |
+|---------|------|
+| 致命问题 | 部分字幕输出罗马字而非中文翻译（如 "kon kon ki~su ne~"、"Ko chi?"） |
+| 致命问题 | 部分字幕保留日文原文不翻译（如 "よしよし"、"よししょー"） |
+| VTuber 口吻 | 即使翻译成功的部分，风格也偏平淡 |
+| 空翻译 | 2 条 |
+| 未翻译/罗马字 | 多个视频出现，k8CCqKYx2Pk 中高达 11 处 |
+
+典型失败案例（_QOMPli80JA）：
+- #3 こんこんきーつねー → "kon kon ki~su ne~"（应为"晚上好狐～"）
+- #18 コチ？ → "Ko chi?"（应为"这边？"）
+- #52 よしよし → "よしよしよし"（未翻译）
+- #53 よいしょー → "よししょー"（未翻译）
+
+虽然价格仅为 3-flash 的 14%，但翻译可靠性不足以用于生产。
+
+### 10.5 性价比综合矩阵
+
+| 模型 | 质量 | 速度 | 单价 | 性价比评级 | 推荐场景 |
+|------|------|------|------|-----------|---------|
+| **3-flash** | ★★★★★ | ★★★☆☆ | ★★☆☆☆ | **生产首选** | 当前生产环境，质量要求高的场景 |
+| **3.1-flash-lite** | ★★★★☆ | ★★★★★ | ★★★★☆ | **最佳性价比** | 成本敏感场景、批量处理 |
+| 2.5-flash | ★★★★☆ | ★★☆☆☆ | ★★★☆☆ | 不推荐 | 无明显优势 |
+| 2.5-flash-lite | ★★☆☆☆ | ★★★★☆ | ★★★★★ | 不推荐 | 翻译可靠性不足 |
+
+### 10.6 结论与建议
+
+1. **当前生产配置维持不变**：gemini-3-flash-preview 仍是质量最优的翻译模型
+2. **gemini-3.1-flash-lite 值得关注**：
+   - 质量约为 3-flash 的 85-90%，对大部分内容可接受
+   - 速度 2.2 倍、成本 50%，综合性价比最优
+   - 适合作为成本优化方案或大批量处理的备选
+   - 主要弱点：口语化表达、VTuber 特殊术语的处理不如 3-flash 细腻
+3. **gemini-2.5-flash 不推荐**：thinking 模型导致速度最慢，质量未见优势
+4. **gemini-2.5-flash-lite 不可用**：存在翻译失败（输出罗马字/不翻译）的致命问题
+
+### 10.7 Gemini 横评复现命令
+
+```bash
+# 批量运行全部 Gemini 横评（已有 run_gemini_benchmark.sh 脚本）
+bash scripts/run_gemini_benchmark.sh
+
+# 单个模型手动运行（示例：gemini-3.1-flash-lite）
+# 步骤1: optimize
+python scripts/translation_benchmark.py --video-id VIDEO_ID --model volc-kimi-k2.5 \
+    --sample 0 --batch-size 100 --thread-num 10 --optimize-only --tag gemini_bench
+
+# 步骤2: translate（使用步骤1的 optimized.srt）
+python scripts/translation_benchmark.py --video-id VIDEO_ID --model gemini-3.1-flash-lite \
+    --sample 0 --batch-size 100 --thread-num 10 \
+    --optimized-input scripts/translation_benchmark_results/VIDEO_ID/volc-kimi-k2.5_full_gemini_bench/optimized.srt \
+    --tag gemini_bench
+```
+
+新增模型配置名：`gemini-3-flash`、`gemini-3.1-flash-lite`、`gemini-2.5-flash`、`gemini-2.5-flash-lite`
+
+---
+
+## 十一、API 端点信息
+
+| 服务 | 提供商 | Base URL | 主要用途 | 环境变量 |
+|------|--------|----------|--------|--------|
+| 火山引擎方舟 | 火山引擎 | `https://ark.cn-beijing.volces.com/api/coding/v3` | **optimize 主力** | `VAT_VOLC_APIKEY` |
+| Google Gemini | Google | `https://generativelanguage.googleapis.com/v1beta/openai` | **translate 主力** | `VAT_GOOGLE_APIKEY` |
+| DashScope | 阿里云 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 备用 | `VAT_DASHSCOPE_APIKEY` |
+| videocaptioner中转站 | 第三方 | `https://api.videocaptioner.cn` | split/scene_identify | - |
+| **phpth 中转站** | **第三方(免费)** | **`https://ai.phpth.cn/v1`** | **translate 备用** | **`VAT_PHPTH_APIKEY`** |
 
 **注意**：
 - 火山引擎 thinking 自动关闭已内置到 `call_llm`（`vat/llm/client.py`），无需手动配置
-- 环境变量 `VAT_VOLC_APIKEY` 需要设置火山引擎 API Key
+- phpth 中转站使用时 batch_size 不超过 50（translate+reflect 模式，详见第四章 phpth 对比小节）
 - 所有 API 密钥通过环境变量管理，不写入代码/配置的明文中
 
 ---
 
-## 十一、评测工具说明
+## 十二、评测工具说明
 
 ### 翻译评测
 
@@ -435,7 +653,15 @@ python scripts/translation_benchmark.py --video-id _QOMPli80JA --compare
 python scripts/translation_benchmark.py --list-models
 ```
 
-支持的参数：`--no-reflect`(standard模式)、`--temperature`、`--skip-optimize`、`--tag`(区分实验)
+```bash
+# phpth 中转站模型测试（免费备用通道）
+python scripts/translation_benchmark.py --video-id VIDEO_ID --model phpth-gpt-5.4 \
+    --sample 0 --prompt-lang en --batch-size 30 --thread-num 10 --tag "描述"
+# 可选模型名: phpth-gpt-5.4, phpth-claude-opus-4-6
+# 注意: batch_size 不要超过 50（translate+reflect 模式下会 504 超时）
+```
+
+支持的参数：`--no-reflect`(standard模式)、`--temperature`、`--skip-optimize`、`--tag`(区分实验)、`--thread-num`
 
 ### ASR参数评测
 
@@ -449,6 +675,7 @@ python scripts/asr_evaluation/evaluate_params.py
 ```
 scripts/
 ├── translation_benchmark.py                           # 翻译评测脚本
+├── run_gemini_benchmark.sh                            # Gemini 横评批量运行脚本
 ├── translation_benchmark_prompts/
 │   ├── optimize_system_zh.md                          # 中文optimize系统提示词
 │   ├── translate_reflect_zh.md                        # 中文translate系统提示词
@@ -458,7 +685,7 @@ scripts/
 │   ├── _QOMPli80JA/                                   # 主测试视频（22+组配置）
 │   ├── k8CCqKYx2Pk/                                   # ASR差案例
 │   ├── czIBPN1eCbU/                                   # 美食实况
-│   └── ...（共12个视频目录）
+│   └── ...（共15个视频目录）
 └── asr_evaluation/                                    # ASR参数评测脚本
 
 docs/
@@ -468,4 +695,4 @@ docs/
 
 ---
 
-*最后更新: 2026-03-02*
+*最后更新: 2026-03-10*

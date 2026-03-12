@@ -49,77 +49,157 @@ MODEL_CONFIGS = {
     },
     "MiniMax-M2.5": {
         "model": "MiniMax-M2.5",
-        "api_key": "REDACTED_DASHSCOPE_KEY",
+        "api_key": os.environ.get("VAT_DASHSCOPE_APIKEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",  # 国内服务不需要代理
     },
     "kimi-k2.5": {
         "model": "kimi-k2.5",
-        "api_key": "REDACTED_DASHSCOPE_KEY",
+        "api_key": os.environ.get("VAT_DASHSCOPE_APIKEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
     "qwen3.5-plus": {
         "model": "qwen3.5-plus",
-        "api_key": "REDACTED_DASHSCOPE_KEY",
+        "api_key": os.environ.get("VAT_DASHSCOPE_APIKEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
     "glm-5": {
         "model": "glm-5",
-        "api_key": "REDACTED_DASHSCOPE_KEY",
+        "api_key": os.environ.get("VAT_DASHSCOPE_APIKEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
     "qwen3-max": {
         "model": "qwen3-max-2026-01-23",
-        "api_key": "REDACTED_DASHSCOPE_KEY",
+        "api_key": os.environ.get("VAT_DASHSCOPE_APIKEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "proxy": "",
     },
     "glm-4.7": {
         "model": "glm-4.7",
-        "api_key": "REDACTED_DASHSCOPE_KEY",
+        "api_key": os.environ.get("VAT_DASHSCOPE_APIKEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "proxy": "",
+    },
+    # ===== 中转站 GPT 模型（http://81.70.32.82） =====
+    # 可用模型：gpt-5, gpt-5.1, gpt-5.2, gpt-5.4, gpt-5-codex, gpt-5.1-codex, etc.
+    # API Key 通过环境变量 VAT_PROXY_APIKEY 传入
+    "proxy-gpt-5.4": {
+        "model": "gpt-5.4",
+        "api_key": os.environ.get("VAT_PROXY_APIKEY", ""),
+        "base_url": "http://81.70.32.82/v1",
+        "proxy": "",
+    },
+    "proxy-gpt-5.2": {
+        "model": "gpt-5.2",
+        "api_key": os.environ.get("VAT_PROXY_APIKEY", ""),
+        "base_url": "http://81.70.32.82/v1",
+        "proxy": "",
+    },
+    "proxy-gpt-5.1": {
+        "model": "gpt-5.1",
+        "api_key": os.environ.get("VAT_PROXY_APIKEY", ""),
+        "base_url": "http://81.70.32.82/v1",
+        "proxy": "",
+    },
+    "proxy-gpt-5": {
+        "model": "gpt-5",
+        "api_key": os.environ.get("VAT_PROXY_APIKEY", ""),
+        "base_url": "http://81.70.32.82/v1",
+        "proxy": "",
+    },
+    "proxy-gpt-5.1-codex-max": {
+        "model": "gpt-5.1-codex-max",
+        "api_key": os.environ.get("VAT_PROXY_APIKEY", ""),
+        "base_url": "http://81.70.32.82/v1",
+        "proxy": "",
+    },
+    # ===== 中转站 GPT/Claude 模型（ai.phpth.cn） =====
+    # 可用模型：gpt-5, gpt-5.1, gpt-5.2, gpt-5.4, claude-opus-4-6, claude-sonnet-4-6
+    # API Key 通过环境变量 VAT_PHPTH_APIKEY 传入
+    "phpth-gpt-5.4": {
+        "model": "gpt-5.4",
+        "api_key": os.environ.get("VAT_PHPTH_APIKEY", ""),
+        "base_url": "https://ai.phpth.cn/v1",
+        "proxy": "",
+    },
+    "phpth-claude-sonnet-4-6": {
+        "model": "claude-sonnet-4-6",
+        "api_key": os.environ.get("VAT_PHPTH_APIKEY", ""),
+        "base_url": "https://ai.phpth.cn/v1",
+        "proxy": "",
+    },
+    "phpth-claude-opus-4-6": {
+        "model": "claude-opus-4-6",
+        "api_key": os.environ.get("VAT_PHPTH_APIKEY", ""),
+        "base_url": "https://ai.phpth.cn/v1",
         "proxy": "",
     },
     # ===== 火山引擎方舟模型 =====
     # 可用模型：kimi-k2.5, deepseek-v3.2, glm-4.7, doubao-seed-2.0-code, doubao-seed-code, kimi-k2-thinking
     "volc-kimi-k2.5": {
         "model": "kimi-k2.5",
-        "api_key": "REDACTED_VOLC_KEY",
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "api_key": os.environ.get("VAT_VOLC_APIKEY", ""),
+        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
         "proxy": "",
     },
     "volc-deepseek-v3.2": {
         "model": "deepseek-v3.2",
-        "api_key": "REDACTED_VOLC_KEY",
+        "api_key": os.environ.get("VAT_VOLC_APIKEY", ""),
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-glm-4.7": {
         "model": "glm-4.7",
-        "api_key": "REDACTED_VOLC_KEY",
+        "api_key": os.environ.get("VAT_VOLC_APIKEY", ""),
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-doubao-seed-2.0-code": {
         "model": "doubao-seed-2.0-code",
-        "api_key": "REDACTED_VOLC_KEY",
+        "api_key": os.environ.get("VAT_VOLC_APIKEY", ""),
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-doubao-seed-code": {
         "model": "doubao-seed-code",
-        "api_key": "REDACTED_VOLC_KEY",
+        "api_key": os.environ.get("VAT_VOLC_APIKEY", ""),
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
     },
     "volc-kimi-k2-thinking": {
         "model": "kimi-k2-thinking",
-        "api_key": "REDACTED_VOLC_KEY",
+        "api_key": os.environ.get("VAT_VOLC_APIKEY", ""),
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "proxy": "",
+    },
+    # ===== Google Gemini 模型（通过 Google API + 代理） =====
+    # 用于 Gemini 系列横向对比评测
+    "gemini-3-flash": {
+        "model": "gemini-3-flash-preview",
+        "api_key": os.environ.get("VAT_GOOGLE_APIKEY", ""),
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "proxy": "http://localhost:7990",
+    },
+    "gemini-3.1-flash-lite": {
+        "model": "gemini-3.1-flash-lite-preview",
+        "api_key": os.environ.get("VAT_GOOGLE_APIKEY", ""),
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "proxy": "http://localhost:7990",
+    },
+    "gemini-2.5-flash": {
+        "model": "gemini-2.5-flash",
+        "api_key": os.environ.get("VAT_GOOGLE_APIKEY", ""),
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "proxy": "http://localhost:7990",
+    },
+    "gemini-2.5-flash-lite": {
+        "model": "gemini-2.5-flash-lite",
+        "api_key": os.environ.get("VAT_GOOGLE_APIKEY", ""),
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "proxy": "http://localhost:7990",
     },
 }
 
@@ -224,6 +304,8 @@ def run_benchmark(
     custom_translate_prompt_path: str = "",
     optimized_input_path: str = "",
     skip_reflect: bool = False,
+    thread_num: int = 3,
+    optimize_only: bool = False,
 ):
     """
     对指定视频用指定模型跑 optimize + translate 流程
@@ -240,6 +322,7 @@ def run_benchmark(
         custom_translate_prompt_path: 自定义翻译prompt文件路径（覆盖默认）
         optimized_input_path: 预优化字幕文件路径（跳过optimize阶段，直接用此文件做translate）
         skip_reflect: 是否使用standard模式而非reflect模式
+        optimize_only: 是否只运行optimize阶段，跳过translate
     """
     if model_name not in MODEL_CONFIGS:
         raise ValueError(
@@ -273,6 +356,60 @@ def run_benchmark(
         
         llm_client_mod.get_or_create_client = _patched_get_or_create
         logger.info("已安装火山引擎 thinking=disabled 补丁（via get_or_create_client）")
+    
+    # 中转站模型：强制 stream=true 适配
+    # 该中转站 API 要求 stream 必须为 true，否则返回错误
+    # 方案：wrap client.create，强制 stream=True，收集 chunks 拼装为非流式响应
+    if config.get("base_url", "").startswith("http://81.70.32.82"):
+        import vat.llm.client as llm_client_mod
+        from openai.types.chat import ChatCompletion, ChatCompletionMessage
+        from openai.types.chat.chat_completion import Choice
+        _original_get_or_create_proxy = llm_client_mod.get_or_create_client
+        
+        def _patched_get_or_create_proxy(*args, **kwargs):
+            client = _original_get_or_create_proxy(*args, **kwargs)
+            if getattr(client, '_proxy_stream_patched', False):
+                return client
+            base_url_str = str(client.base_url)
+            if '81.70.32.82' in base_url_str:
+                _orig_create = client.chat.completions.create
+                def _create_with_stream(*a, **kw):
+                    kw['stream'] = True
+                    stream = _orig_create(*a, **kw)
+                    # 收集所有 chunk 的 content
+                    content_parts = []
+                    model_name_resp = kw.get('model', 'unknown')
+                    resp_id = None
+                    for chunk in stream:
+                        if not resp_id and hasattr(chunk, 'id'):
+                            resp_id = chunk.id
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        if hasattr(delta, 'content') and delta.content:
+                            content_parts.append(delta.content)
+                    # 拼装为 ChatCompletion 格式
+                    full_content = "".join(content_parts)
+                    return ChatCompletion(
+                        id=resp_id or "proxy-stream",
+                        object="chat.completion",
+                        created=0,
+                        model=model_name_resp,
+                        choices=[Choice(
+                            index=0,
+                            message=ChatCompletionMessage(
+                                role="assistant",
+                                content=full_content,
+                            ),
+                            finish_reason="stop",
+                        )],
+                    )
+                client.chat.completions.create = _create_with_stream
+                client._proxy_stream_patched = True
+            return client
+        
+        llm_client_mod.get_or_create_client = _patched_get_or_create_proxy
+        logger.info("已安装中转站 stream=true 适配补丁")
     
     # 安装中文提示词补丁
     if prompt_lang == "zh":
@@ -359,7 +496,7 @@ def run_benchmark(
         opt_start = time.time()
         
         optimizer = LLMTranslator(
-            thread_num=3,         # 降低并发，避免触发限流
+            thread_num=thread_num,
             batch_num=batch_size,
             target_language=TargetLanguage.SIMPLIFIED_CHINESE,
             output_dir=str(output_dir),
@@ -396,12 +533,35 @@ def run_benchmark(
         optimized_data = asr_data
         opt_elapsed = 0
     
+    # optimize_only 模式：只跑 optimize，跳过 translate
+    if optimize_only:
+        total_elapsed = time.time() - start_time
+        meta = {
+            "model_name": model_name,
+            "model": config["model"],
+            "base_url": config["base_url"],
+            "video_id": video_id,
+            "sample_count": len(asr_data),
+            "skip_optimize": skip_optimize,
+            "optimize_only": True,
+            "optimize_time_sec": round(opt_elapsed, 1),
+            "total_time_sec": round(total_elapsed, 1),
+            "timestamp": datetime.now().isoformat(),
+            "prompt_lang": prompt_lang,
+            "tag": tag,
+        }
+        meta_path = output_dir / "meta.json"
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"=== Optimize-only 完成: {model_name}, 耗时 {total_elapsed:.1f}s ===")
+        logger.info(f"  optimized.srt: {output_dir / 'optimized.srt'}")
+        return True
+
     # 创建 translator（用于 translate）
     logger.info("--- 阶段 2: Translate (reflect mode) ---")
     trans_start = time.time()
     
     translator = LLMTranslator(
-        thread_num=3,
+        thread_num=thread_num,
         batch_num=batch_size,
         target_language=TargetLanguage.SIMPLIFIED_CHINESE,
         output_dir=str(output_dir),
@@ -445,7 +605,7 @@ def run_benchmark(
         "timestamp": datetime.now().isoformat(),
         "reflect_mode": not skip_reflect,
         "batch_size": batch_size,
-        "thread_num": 3,
+        "thread_num": thread_num,
         "prompt_lang": prompt_lang,
         "temperature": temperature,
         "tag": tag,
@@ -594,9 +754,11 @@ def main():
     parser.add_argument("--prompt-lang", choices=["en", "zh"], default="en", help="提示词语言 (en=英文/zh=中文)")
     parser.add_argument("--temperature", type=float, default=1.0, help="LLM 温度参数")
     parser.add_argument("--batch-size", type=int, default=30, help="每批处理的字幕条数")
+    parser.add_argument("--thread-num", type=int, default=3, help="并发线程数")
     parser.add_argument("--tag", type=str, default="", help="额外的输出目录标签")
     parser.add_argument("--custom-translate-prompt", type=str, default="", help="自定义翻译prompt文件路径（覆盖默认）")
     parser.add_argument("--optimized-input", type=str, default="", help="预优化字幕文件路径（跳过optimize，直接用此文件做translate）")
+    parser.add_argument("--optimize-only", action="store_true", help="只运行 optimize 阶段，跳过 translate（用于预生成 optimized.srt）")
     parser.add_argument("--compare", action="store_true", help="生成对比表（不跑翻译）")
     parser.add_argument("--list-models", action="store_true", help="列出所有可用模型配置")
     
@@ -627,6 +789,8 @@ def main():
         custom_translate_prompt_path=args.custom_translate_prompt,
         optimized_input_path=args.optimized_input,
         skip_reflect=args.no_reflect,
+        thread_num=args.thread_num,
+        optimize_only=args.optimize_only,
     )
     
     if success:
