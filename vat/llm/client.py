@@ -2,6 +2,7 @@
 
 import os
 import threading
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 
@@ -27,6 +28,129 @@ _client_registry: Dict[Tuple[str, str], OpenAI] = {}
 _registry_lock = threading.Lock()
 
 logger = setup_logger("llm_client")
+
+
+def _get_env_provider() -> str:
+    return os.getenv("VAT_LLM_PROVIDER", "openai_compatible").strip() or "openai_compatible"
+
+
+def _get_env_vertex_location() -> str:
+    return os.getenv("VAT_VERTEX_LOCATION", "global").strip() or "global"
+
+
+def _resolve_provider(base_url: str = "") -> str:
+    if base_url.strip():
+        return "openai_compatible"
+    return _get_env_provider()
+
+
+def _extract_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    raise ValueError(f"当前仅支持字符串消息内容，实际类型: {type(content).__name__}")
+
+
+def _build_vertex_request(messages: List[dict], temperature: float, **kwargs: Any) -> Dict[str, Any]:
+    system_parts: List[Dict[str, str]] = []
+    contents: List[Dict[str, Any]] = []
+
+    for message in messages:
+        role = message.get("role", "user")
+        text = _extract_message_text(message.get("content", ""))
+        if not text:
+            continue
+        if role == "system":
+            system_parts.append({"text": text})
+            continue
+        vertex_role = "model" if role == "assistant" else "user"
+        contents.append({"role": vertex_role, "parts": [{"text": text}]})
+
+    request_body: Dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": {"temperature": temperature},
+    }
+    if system_parts:
+        request_body["systemInstruction"] = {"parts": system_parts}
+
+    max_tokens = kwargs.get("max_tokens")
+    if max_tokens is not None:
+        request_body["generationConfig"]["maxOutputTokens"] = max_tokens
+
+    return request_body
+
+
+def _adapt_vertex_response(response_json: Dict[str, Any]) -> Any:
+    candidates = response_json.get("candidates") or []
+    content = ""
+    if candidates:
+        parts = (((candidates[0] or {}).get("content") or {}).get("parts") or [])
+        texts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+        content = "".join(texts)
+
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content)
+            )
+        ]
+    )
+
+
+def _raise_vertex_http_error(exc: httpx.HTTPStatusError) -> None:
+    response = exc.response
+    status_code = response.status_code
+    try:
+        body = response.json()
+    except Exception:
+        body = {"error": {"message": response.text}}
+
+    message = ((body.get("error") or {}).get("message")) or response.text or "Vertex API request failed"
+
+    if status_code == 400:
+        raise openai.BadRequestError(message=message, response=response, body=body) from exc
+    if status_code == 401:
+        raise openai.AuthenticationError(message=message, response=response, body=body) from exc
+    if status_code == 404:
+        raise openai.NotFoundError(message=message, response=response, body=body) from exc
+    if status_code == 429:
+        raise openai.RateLimitError(message=message, response=response, body=body) from exc
+    raise RuntimeError(f"Vertex API 请求失败({status_code}): {message}") from exc
+
+
+def _call_vertex_native(
+    messages: List[dict],
+    model: str,
+    temperature: float = 1,
+    api_key: str = "",
+    proxy: str = "",
+    **kwargs: Any,
+) -> Any:
+    effective_key = api_key or os.getenv("OPENAI_API_KEY", "").strip()
+    location = _get_env_vertex_location()
+
+    if not effective_key:
+        raise ValueError("Vertex LLM 配置不完整: api_key=缺失")
+    if not location:
+        raise ValueError("Vertex LLM 配置不完整: location=缺失")
+
+    endpoint = f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent?key={effective_key}"
+    request_body = _build_vertex_request(messages, temperature, **kwargs)
+
+    try:
+        response = httpx.post(
+            endpoint,
+            json=request_body,
+            headers={"Content-Type": "application/json"},
+            timeout=openai.DEFAULT_TIMEOUT,
+            proxy=proxy or None,
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        _raise_vertex_http_error(exc)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Vertex API 网络请求失败: {exc}") from exc
+
+    return _adapt_vertex_response(response.json())
 
 
 def normalize_base_url(base_url: str) -> str:
@@ -75,7 +199,7 @@ def normalize_base_url(base_url: str) -> str:
     return normalized
 
 
-def get_llm_client() -> OpenAI:
+def get_llm_client() -> Any:
     """Get global LLM client instance (thread-safe singleton).
 
     Returns:
@@ -85,6 +209,10 @@ def get_llm_client() -> OpenAI:
         ValueError: If OPENAI_BASE_URL or OPENAI_API_KEY env vars not set
     """
     global _global_client
+
+    provider = _get_env_provider()
+    if provider != "openai_compatible":
+        return None
 
     if _global_client is None:
         with _client_lock:
@@ -105,7 +233,7 @@ def get_llm_client() -> OpenAI:
     return _global_client
 
 
-def get_or_create_client(api_key: str = "", base_url: str = "", proxy: str = "") -> OpenAI:
+def get_or_create_client(api_key: str = "", base_url: str = "", proxy: str = "") -> Any:
     """Get or create an OpenAI client for specific credentials.
     
     If both api_key and base_url are empty and no proxy override, returns the global client.
@@ -119,6 +247,11 @@ def get_or_create_client(api_key: str = "", base_url: str = "", proxy: str = "")
     Returns:
         OpenAI client instance (cached per unique credentials + proxy)
     """
+    provider = _resolve_provider(base_url)
+
+    if provider != "openai_compatible":
+        return None
+
     if not api_key and not base_url and not proxy:
         return get_llm_client()
     
@@ -142,7 +275,13 @@ def get_or_create_client(api_key: str = "", base_url: str = "", proxy: str = "")
                 client_kwargs = dict(base_url=effective_url, api_key=effective_key)
                 if proxy:
                     # 显式指定代理，覆盖环境变量
-                    client_kwargs["http_client"] = httpx.Client(proxy=proxy)
+                    # 必须传入与 OpenAI SDK 一致的 timeout 和 limits，
+                    # 否则 httpx 裸默认值（pool_timeout=5s）会导致高并发下 PoolTimeout
+                    client_kwargs["http_client"] = httpx.Client(
+                        proxy=proxy,
+                        timeout=openai.DEFAULT_TIMEOUT,
+                        limits=openai.DEFAULT_CONNECTION_LIMITS,
+                    )
                     logger.debug(f"Created LLM client for: {effective_url} (proxy: {proxy})")
                 else:
                     logger.debug(f"Created LLM client for: {effective_url}")
@@ -190,23 +329,34 @@ def call_llm(
     Raises:
         ValueError: If response is invalid (empty choices or content)
     """
-    client = get_or_create_client(api_key, base_url, proxy)
+    provider = _resolve_provider(base_url)
+    if provider == "vertex_native":
+        response = _call_vertex_native(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            proxy=proxy,
+            **kwargs,
+        )
+    else:
+        client = get_or_create_client(api_key, base_url, proxy)
     # logger.trace(f"Calling LLM API: {model}, {messages}, {temperature}, {kwargs}")
 
-    # 火山引擎方舟：自动关闭 thinking 模式
-    # kimi-k2.5 默认走 thinking 路径（34s/call），关闭后降至 0.7s/call
-    # 实验验证 thinking 对翻译/ASR纠错无帮助，仅增加延迟
-    effective_base_url = base_url or os.getenv("OPENAI_BASE_URL", "")
-    if "ark.cn-beijing.volces.com" in effective_base_url:
-        kwargs.setdefault("extra_body", {})
-        kwargs["extra_body"].setdefault("thinking", {"type": "disabled"})
+        # 火山引擎方舟：自动关闭 thinking 模式
+        # kimi-k2.5 默认走 thinking 路径（34s/call），关闭后降至 0.7s/call
+        # 实验验证 thinking 对翻译/ASR纠错无帮助，仅增加延迟
+        effective_base_url = base_url or os.getenv("OPENAI_BASE_URL", "")
+        if "ark.cn-beijing.volces.com" in effective_base_url:
+            kwargs.setdefault("extra_body", {})
+            kwargs["extra_body"].setdefault("thinking", {"type": "disabled"})
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,  # pyright: ignore[reportArgumentType]
-        temperature=temperature,
-        **kwargs,
-    )
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,  # pyright: ignore[reportArgumentType]
+            temperature=temperature,
+            **kwargs,
+        )
 
     # Validate response (exceptions are not cached by diskcache)
     if not (

@@ -303,8 +303,12 @@ class LLMTranslatorConfig:
     # Optimize 配置（嵌套）
     optimize: OptimizeConfig
     
-    # 上下文配置（新增）
+    # 上下文配置
     enable_context: bool = True  # 是否启用前文上下文
+    
+    # 降级翻译开关：批量翻译失败时是否自动回退到逐条翻译
+    # 关闭后翻译失败直接报错（推荐），便于通过重跑修复，避免降级导致质量下降
+    enable_fallback: bool = False
     
     # LLM 连接覆写（可选，留空则使用全局 llm 配置）
     api_key: str = ""    # 覆写 API Key（支持 ${VAR_NAME} 环境变量）
@@ -340,6 +344,9 @@ class LLMConfig:
     api_key: str
     base_url: str
     model: str = ""  # 全局默认模型（各阶段未指定 model 时的 fallback）
+    provider: str = "openai_compatible"
+    location: str = "global"
+    project_id: str = ""
     
     _initialized: bool = field(default=False, repr=False)
     
@@ -353,6 +360,8 @@ class LLMConfig:
         # 解析环境变量占位符
         self.api_key = _resolve_env_var(self.api_key)
         self.base_url = _resolve_env_var(self.base_url)
+        self.location = _resolve_env_var(self.location) if self.location else "global"
+        self.project_id = _resolve_env_var(self.project_id) if self.project_id else ""
         
         # 统一设置环境变量（所有LLM调用都从环境变量读取）
         if self.api_key and not self.api_key.startswith("${"):
@@ -362,9 +371,26 @@ class LLMConfig:
         if self.base_url:
             os.environ["OPENAI_BASE_URL"] = self.base_url
             logger.debug(f"已设置 OPENAI_BASE_URL 环境变量: {self.base_url}")
+
+        os.environ["VAT_LLM_PROVIDER"] = self.provider
+        logger.debug(f"已设置 VAT_LLM_PROVIDER 环境变量: {self.provider}")
+
+        if self.location:
+            os.environ["VAT_VERTEX_LOCATION"] = self.location
+            logger.debug(f"已设置 VAT_VERTEX_LOCATION 环境变量: {self.location}")
+
+        if self.project_id:
+            os.environ["VAT_VERTEX_PROJECT_ID"] = self.project_id
+            logger.debug(f"已设置 VAT_VERTEX_PROJECT_ID 环境变量: {self.project_id}")
         
         # 检查配置完整性
-        if not self.api_key or not self.base_url:
+        if self.provider == "vertex_native":
+            if not self.api_key or not self.location:
+                logger.warning(
+                    "LLM Vertex 配置不完整，部分功能（智能断句、翻译、视频信息翻译）可能无法使用。"
+                    "请在配置文件中设置 llm.api_key 和 llm.location"
+                )
+        elif not self.api_key or not self.base_url:
             logger.warning(
                 "LLM 配置不完整，部分功能（智能断句、翻译、视频信息翻译）可能无法使用。"
                 "请在配置文件中设置 llm.api_key 和 llm.base_url"
@@ -374,6 +400,8 @@ class LLMConfig:
     
     def is_available(self) -> bool:
         """检查LLM配置是否可用"""
+        if self.provider == "vertex_native":
+            return bool(self.api_key and self.location)
         return bool(self.api_key and self.base_url)
 
 
@@ -716,6 +744,9 @@ class Config:
             api_key=llm_data.get('api_key', ''),
             base_url=llm_data.get('base_url', ''),
             model=llm_data.get('model', ''),
+            provider=llm_data.get('provider', 'openai_compatible'),
+            location=llm_data.get('location', 'global'),
+            project_id=llm_data.get('project_id', ''),
         )
         
         # 代理配置（全局默认 + 各环节独立覆盖，自动设置环境变量）

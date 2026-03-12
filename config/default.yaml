@@ -179,7 +179,8 @@ translator:
     batch_size: 100                          # 每批处理的字幕数量
     thread_num: 10                           # 并发线程数
     custom_prompt: "fubuki"                       # 自定义提示词文件名（相对于 vat/llm/prompts/custom/），如 "translate/example.md"，空字符串表示不使用
-    enable_context: true                    # 是否启用前文上下文（新增）
+    enable_context: true                    # 是否启用前文上下文
+    enable_fallback: false                  # 批量翻译失败时是否回退到逐条翻译（关闭=直接报错重跑，推荐）
     
     # Optimize 配置（嵌套）- 字幕优化
     # 推荐模型：kimi-k2.5，在同语言 optimize 阶段有良好的 ASR 纠错能力
@@ -280,9 +281,12 @@ logging:
 # LLM配置（统一管理，用于断句、翻译、视频信息翻译等所有LLM调用）
 # =============================================================================
 llm:
+  provider: "openai_compatible"                # openai_compatible / vertex_native
   api_key: "${VAT_GOOGLE_APIKEY}"            # Google API Key（全局默认）
   base_url: "https://generativelanguage.googleapis.com/v1beta/openai"  # Google API Base URL
-  model: "gemini-3-flash-preview"                  # 全局默认模型（各阶段未指定 model 时的 fallback）
+  model: "gemini-3-flash-preview"            # 全局默认模型（各阶段未指定 model 时的 fallback）
+  location: "global"                         # Vertex Native 使用的区域
+  project_id: ""                             # 预留：后续若切 Vertex 其他模式可使用
 
 # =============================================================================
 # 代理配置（全局默认 + 各环节独立覆盖）

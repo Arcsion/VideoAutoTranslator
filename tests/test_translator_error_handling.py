@@ -111,6 +111,36 @@ class TestTranslateChunkFailFast:
                 translator._translate_chunk(chunk)
 
 
+# ─── _translate_chunk: enable_fallback 开关 ────────────────────────
+
+class TestTranslateChunkFallbackSwitch:
+    """enable_fallback 开关控制降级行为"""
+
+    def test_fallback_disabled_raises_directly(self, translator):
+        """enable_fallback=False 时，通用异常应直接抛出，不降级"""
+        assert not translator.enable_fallback  # fixture 默认 False
+        chunk = _make_chunk()
+
+        with patch("vat.translator.llm_translator.call_llm") as mock_llm, \
+             patch.object(translator, "_translate_chunk_single") as mock_single:
+            mock_llm.side_effect = Exception("API timeout")
+            with pytest.raises(Exception, match="API timeout"):
+                translator._translate_chunk(chunk)
+            mock_single.assert_not_called()
+
+    def test_fallback_enabled_calls_single_translate(self, translator):
+        """enable_fallback=True 时，通用异常应降级到逐条翻译"""
+        translator.enable_fallback = True
+        chunk = _make_chunk()
+
+        with patch("vat.translator.llm_translator.call_llm") as mock_llm, \
+             patch.object(translator, "_translate_chunk_single", return_value=chunk) as mock_single:
+            mock_llm.side_effect = Exception("API timeout")
+            result = translator._translate_chunk(chunk)
+            mock_single.assert_called_once_with(chunk)
+            assert result == chunk
+
+
 # ─── _translate_chunk_single: 全部失败时抛异常 ──────────────────────
 
 class TestTranslateChunkSingleFailure:

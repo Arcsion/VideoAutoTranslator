@@ -341,12 +341,16 @@ class VideoProcessor:
         
         # 调用方已显式指定 playlist_id（如 CLI 的 -p 参数），跳过自动检测
         if self._playlist_id:
+            self.logger.info(
+                    f"应用指定playlist {self._playlist_id}"
+                )
             return
         
         playlist_ids = self.db.get_video_playlists(self.video_id)
         
         if len(playlist_ids) == 0:
             # 视频不属于任何 playlist，使用默认 config
+            self.logger.info("该视频未指定应用的custom提示词，且属于多个playlist，无法自动推断，应用默认custom提示词 ")
             return
         
         if len(playlist_ids) == 1:
@@ -1352,6 +1356,7 @@ class VideoProcessor:
             optimize_base_url=optimize_base_url_override,
             proxy=self.config.get_stage_proxy("translate") or "",
             optimize_proxy=self.config.get_stage_proxy("optimize") or "",
+            enable_fallback=self.config.translator.llm.enable_fallback,
             progress_callback=self._make_component_progress_callback("subtitle_translator"),
         )
     

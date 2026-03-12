@@ -42,6 +42,7 @@ class LLMTranslator(BaseTranslator):
         optimize_base_url: str = "",
         proxy: str = "",
         optimize_proxy: str = "",
+        enable_fallback: bool = False,
         update_callback: Optional[Callable] = None,
         progress_callback: Optional[Callable] = None,
     ):
@@ -61,6 +62,7 @@ class LLMTranslator(BaseTranslator):
             enable_context: 是否启用前文上下文
             proxy: 翻译 LLM 代理地址（空字符串=使用环境变量）
             optimize_proxy: 优化 LLM 代理地址（空字符串=使用 proxy）
+            enable_fallback: 批量翻译失败时是否自动回退到逐条翻译（默认关闭）
             update_callback: 数据回调（每批翻译结果）
             progress_callback: 进度消息回调
         """
@@ -83,6 +85,7 @@ class LLMTranslator(BaseTranslator):
         self.base_url = base_url
         self.proxy = proxy
         self.optimize_proxy = optimize_proxy  # 由 config.get_stage_proxy 统一 resolve，无类内 fallback
+        self.enable_fallback = enable_fallback
         # optimize 可独立覆写，留空则使用 translate 的凭据（api_key/base_url 的 fallback 由调用方处理）
         self.optimize_model = optimize_model or model
         self.optimize_api_key = optimize_api_key if optimize_api_key else api_key
@@ -493,13 +496,16 @@ class LLMTranslator(BaseTranslator):
             raise RuntimeError(f"API 请求被拒绝（可能是地区限制或参数错误）: {str(e)}") from e
         except Exception as e:
             import traceback
+            if not self.enable_fallback:
+                # 降级已关闭：直接抛出，由上层重跑修复，避免降级导致翻译质量下降
+                logger.error(f"翻译块失败（降级已关闭）: {str(e)}")
+                raise
             logger.error(f"翻译块失败: {str(e)}, 尝试降级处理,traceback: {traceback.format_exc()}")
-            # 其他错误尝试降级处理
+            # 降级：回退到逐条翻译
             try:
                 return self._translate_chunk_single(subtitle_chunk)
             except Exception as fallback_error:
                 logger.error(f"降级翻译也失败: {str(fallback_error)}")
-                # 如果降级也失败，抛出异常
                 raise RuntimeError(f"翻译失败且降级处理也失败: {str(e)}") from e
 
     def _agent_loop(
